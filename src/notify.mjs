@@ -9,7 +9,7 @@
  * wecomWebhook 未配置（secrets）→ 降级为纯日志（骨架期行为），不报错。
  * 零新增依赖：Node 22+ 原生 fetch。
  */
-export function createNotify({ secrets, log = console, fetchImpl = fetch, now = () => new Date().toISOString() } = {}) {
+export function createNotify({ secrets, bot = null, log = console, fetchImpl = fetch, now = () => new Date().toISOString() } = {}) {
   let recentByTarget = new Map(); // 状态口径频控雏形（PRD-3 F1）：同 target 同终态 60s 窗口合并
   const FLOOD_WINDOW_MS = 60_000;
 
@@ -25,12 +25,18 @@ export function createNotify({ secrets, log = console, fetchImpl = fetch, now = 
     recentByTarget.set(key, Date.now());
     if (recentByTarget.size > 200) recentByTarget = new Map([...recentByTarget].slice(-100)); // 防泄漏
 
+    const markdown = render({ kind, target, state, taskId, reason, ts: now() });
+    // 通道一（主）：企微智能机器人长连接 sendMessage 主动推送（PRD-5 F1 通知面）
+    if (bot) {
+      const ok = await bot.push({ markdown });
+      if (ok) return;
+      // bot 通道失败 → 降级老 webhook（若配置了）；都不可用 → stub 日志（通知失败不阻塞，PRD-3 NFR）
+    }
     const webhook = secrets.get("wecomWebhook");
     if (!webhook) {
       log.info?.(`[notify:stub] ${kind} ${target} ${state || reason}（wecomWebhook 未配置，降级日志）`);
       return;
     }
-    const markdown = render({ kind, target, state, taskId, reason, ts: now() });
     try {
       const res = await fetchImpl(webhook, {
         method: "POST",

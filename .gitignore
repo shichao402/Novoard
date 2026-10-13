@@ -1,3 +1,4 @@
 # 本地运行态（hub 数据卷，不进 git）
 .state/
+node_modules/
 *.local.json

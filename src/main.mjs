@@ -13,6 +13,7 @@ import { createRegistry } from "./registry.mjs";
 import { createSecrets } from "./secrets.mjs";
 import { createArtifacts } from "./artifacts.mjs";
 import { createNotify } from "./notify.mjs";
+import { createWecomBot } from "./wecom-bot.mjs";
 import { createRules } from "./rules.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
@@ -29,7 +30,8 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   const queue = createTaskQueue({ dir: queueDir });
   const registry = createRegistry({ validate, log });
   const artifacts = createArtifacts({ dir: artifactsDir });
-  const notify = createNotify({ secrets, log });
+  const wecomBot = createWecomBot({ secrets, log });
+  const notify = createNotify({ secrets, bot: wecomBot, log });
   const rules = createRules({ rulesPath, log });
 
   let tunnelDelegate = async () => ({ ok: false, reason: "tunnel not ready" });
@@ -82,6 +84,11 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, secrets, validate, notify: notifyAndRules, log });
   tunnelDelegate = tunnel.delegate;
 
+  // 企微 bot 通道：server 就绪后绑定本地端口（触发转发用），异步起长连接（失败不阻塞 hub）
+  const listenPort = httpServer.address?.()?.port ?? port;
+  wecomBot.attach(listenPort);
+  wecomBot.start().catch((error) => log.error?.(`企微 bot 启动失败：${error.message}`));
+
   return {
     server: httpServer,
     delegate: tunnel.delegate,
@@ -93,6 +100,7 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     validate,
     notify: notifyAndRules,
     rules,
+    wecomBot,
   };
 }
 

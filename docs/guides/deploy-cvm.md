@@ -71,7 +71,7 @@ docker compose down   # .state 卷保留全部审计/队列/secrets，容器可�
 
 - ~~登录方式~~ 已解决：`~/.ssh/pkv_tencent_cvm`（dec 同步的密钥）
 - ~~DNS 记录~~ 已建：recordId 2429632391
-- 企微 bot：留空待配置（你已确认最后再配）
+- 企微 bot：已配置（2026-10-13）。新版智能机器人（API 模式长连接），凭据 `wecomBotId` / `wecomBotSecret` 落服务器 `deploy/.state/secrets.json`，hub 进程内 SDK（`@wecom/aibot-node-sdk`）出站 wss，无入站端口。通知投递目标 `wecomChatId` 由 bot 从首条消息热学习（在企微里给 bot 发一条消息即可）。触发语法：`run <target>[@<member>]`。
 
 ## 部署实录（2026-10-13）
 
