@@ -28,7 +28,7 @@
 
 ## M2 · Hub 完备与远程触发（PRD-2，Novoard 仓）
 
-目标：人不在电脑前的场景闭环正式化。
+目标：人不在电脑前的场景闭环正式化。2026-10-13 主体落地并线上验收：契约 v1.1（offline/offlineTtl + x-novoard-offline 透传 + queued-offline 响应语义）、hub 侧策略分流/上线补下发/TTL sweeper/重启扫尾、Web 面板 v1（target 目录分组、任务详情耗时与触发者、member 触发选择）；CVM 部署更新（rsync + compose 重建），线上 e2e：离线触发 queued-offline（expiresAt 2h）→ agent 重连 2.6s 自动补下发 → 审计链 member-offline-queued / member-online flush / 终态，双侧对账一致；测试 44/44 绿（+9 离线策略 +3 面板）。AC2 任务全生命周期可见（面板 queued-offline 徽标 + 等待截止时间）、AC3 离线 30s 内通知（queue 策略下离线通知语义变化为入队回执，reject 策略行为不变）。
 
 - [x] 离线拒绝与任务分发策略正式化（试点已踩点）。2026-10-13 落地 queue-with-ttl（契约 v1.0 → v1.1，次版本向后兼容）：target 新增 `offline: reject|queue` + `offlineTtl`（默认 30m），策略经 skill `x-novoard-offline` 扩展随 card 透传（hub 路由离线分流查此字段，ADR-0005 查表纪律延伸）；`queue` 策略下离线触发 202 `queued-offline` + expiresAt 入队，成员 hello 上线钩子自动补下发（tunnel onMemberOnline → flushOfflineTasks），TTL sweeper 到期转 failed（审计 `offline-ttl-expired`）+ 通知；hub 重启扫尾：queued-offline 恢复后 owner 在线立即补下发。测试 9 项（test/offline-queue.test.mjs：单元/reject 不变/入队/上线补下发/TTL/sweeper/A2A 门/真实 WS 链路/重启重放），全量 41/41 绿
 - [x] Web 面板 v1（agent 列表、target 目录、任务历史、触发入口）。2026-10-13 落地：target 目录按成员分组（离线成员灰显可见，`/api/targets` 新端点 + registry.catalog()）、任务历史升级为可展开详情（状态/耗时/触发者/artifacts 链接/history 流水）、触发入口支持成员选择（datalist 自动补全 + 下拉）、queued-offline 状态徽标与等待截止时间展示；单页零构建零外部资源不变（issue-handler dashboard 模式）。测试 3 项（test/dashboard.test.mjs），全量 44/44 绿
