@@ -40,7 +40,7 @@ Novoard 是整个系统的产品仓库，承载：
 
 ## 状态
 
-M0（文档与契约）已收官；M1 试点接入进行中：hub 骨架已落地（`src/` 八模块，原生 `node:http` + `ws` + `yaml` + `ajv`，契约 v1.0 字面实现）；试点 target 定义已落库（`agents/` 三 agent targets.yaml + 共用模板，lite-agent 语言定稿 Node）；lite-agent 已落地（`src/lite-agent/` 六模块：模板展开、四类 step 执行内核、单并发、断线重连 + 帧重放、双侧审计，e2e 全链路全绿）；通知扇出与最小规则引擎已落地（`src/notify.mjs` 企微 markdown + 频控；`src/rules.mjs` 终态匹配 + ruleTrace 防环 + 动作不旁路）。测试 24 项全绿。待 CVM 部署、企微 bot 与三环境部署。见 [roadmap](docs/roadmap/roadmap.md)。
+M0（文档与契约）已收官；M1 试点接入进行中：hub 已部署上线腾讯云广州 CVM（`novoard.firoyang.com`，Docker 容器 + certbot HTTPS + nginx 443 反代，公网全链路与 e2e 闭环已验证：trigger → 下发 → 执行 → 终态回传 → 双侧审计对账）；lite-agent 已落地（`src/lite-agent/` 六模块，mac-work 已实际接入线上 hub）；试点 target 定义已落库（`agents/` 三 agent targets.yaml + 共用模板）；通知扇出与最小规则引擎已落地（企微 webhook 留空 stub）。测试 25 项全绿。待企微 bot 配置、mac-home/intranet-weekly 两环境接入与 iOS 快捷指令实测。见 [roadmap](docs/roadmap/roadmap.md)。
 
 ## 开发
 

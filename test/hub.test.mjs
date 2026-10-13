@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -129,6 +129,18 @@ test("secrets：双池令牌与回退", () => {
   assert.equal(s.has("wecomWebhook"), false);
   s.set({ clientKeys: ["with-key-1"] });
   assert.deepEqual(s.get("clientKeys"), ["with-key-1"]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("secrets：agentTokens 映射形态（部署态 agentId→token）归一化为令牌池", () => {
+  const dir = tmpStateDir();
+  writeFileSync(join(dir, "secrets.json"), JSON.stringify({
+    agentTokens: { "mac-work": "agt_macwork_token_123456", "mac-home": "agt_machome_token_654321" },
+    dashboardToken: "dash-pass-123456",
+  }));
+  const s = createSecrets({ dir, env: {} });
+  assert.deepEqual(s.get("agentTokens"), ["agt_macwork_token_123456", "agt_machome_token_654321"]);
+  assert.equal(s.has("agentTokens"), true);
   rmSync(dir, { recursive: true, force: true });
 });
 

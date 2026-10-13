@@ -2,7 +2,9 @@
 # nginx 不进 compose：hub 端口仅绑 127.0.0.1，由宿主机 nginx 子目录反代（见 deploy/nginx-novoard.conf）
 services:
   novoord-hub:
-    build: ..
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: novoard-hub
     restart: unless-stopped
     ports:

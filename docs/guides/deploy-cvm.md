@@ -16,10 +16,10 @@ hub-and-spoke 拓扑要求 hub 对所有 agent 出站可达。目标机为公网
 
 ## 一、前置
 
-- 登录方式（待定）：机器绑定 SSH 密钥 `skey-rddrtk1r`，私钥不在本地。选项：a) 控制台绑定新密钥对（CAM 子密钥无 ModifyInstanceVpcConfig 类权限，需主账号操作）；b) `skey-rddrtk1r` 私钥放到 `~/.ssh/` 下告知文件名
-- Docker（机器已有 nginx；docker 未见则装：`yum install -y docker docker-compose-plugin` 或等价）
-- 代码分发：`rsync`/`scp` 直传（公网机，建议走 SSH）
-- HTTPS：`novoard.firoyang.com` 新 DNS 记录 → 43.138.156.146（DNSPod，当前 API 凭据可直接创建）；证书走机器既有 acme.sh 流程签发 Let's Encrypt，nginx 子目录并入现有 443 server 块
+- 登录方式（已解决）：`ssh -p 22 -i ~/.ssh/pkv_tencent_cvm root@43.138.156.146`（root 免密）
+- Docker 28.4 + Compose 2.32 已装；nginx 1.26 active
+- 代码分发：`rsync` 直传（见下）
+- HTTPS（已完成）：DNS `novoard.firoyang.com → 43.138.156.146`（DNSPod recordId 2429632391）；证书 certbot webroot 签发（Let's Encrypt，2027-01-11 到期），80 块 ACME 验证 + 301，443 反代 127.0.0.1:38666
 
 ## 二、hub 容器
 
@@ -69,6 +69,13 @@ docker compose down   # .state 卷保留全部审计/队列/secrets，容器可�
 
 ## 待决事项
 
-- 登录方式：a) 控制台绑新密钥对（主账号操作）b) 提供 `skey-rddrtk1r` 私钥 —— 二选一
-- DNS 记录 `novoard.firoyang.com` → 43.138.156.146：待创建（DNSPod API 凭据已就绪，等你点头即建）
+- ~~登录方式~~ 已解决：`~/.ssh/pkv_tencent_cvm`（dec 同步的密钥）
+- ~~DNS 记录~~ 已建：recordId 2429632391
 - 企微 bot：留空待配置（你已确认最后再配）
+
+## 部署实录（2026-10-13）
+
+已完成：DNS → rsync → 容器（127.0.0.1:38666）→ certbot 证书 → nginx 443 → 公网全链路验证。
+e2e 闭环已通：mac-work 注册 → trigger（HTTPS）→ agent 执行 → completed 终态回传 → 双侧审计对账。
+部署中修复三个缺陷：secrets.mjs 对象形态归一化、agent 配置 contractVersion（v1.0→1.0）、runner script 步骤插值缺失（均带回归测试）。
+运维注意：nginx WS 升级用 `00-novoard-map.conf` 的 map 变量；certbot 续期依赖既有 systemd timer；磁盘 83% 水位需留意。

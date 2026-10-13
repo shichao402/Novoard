@@ -35,6 +35,7 @@ export function createSecrets({ dir, env = process.env } = {}) {
   function toList(value) {
     if (Array.isArray(value)) return value.map(String).map((s) => s.trim()).filter(Boolean);
     if (typeof value === "string") return value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (value && typeof value === "object") return Object.values(value).map(String).map((s) => s.trim()).filter(Boolean);
     return [];
   }
 
