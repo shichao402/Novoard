@@ -1,0 +1,13 @@
+# Novoard hub 单机部署（CVM 9.134.241.248，重庆 1 区）
+# nginx 不进 compose：hub 端口仅绑 127.0.0.1，由宿主机 nginx 子目录反代（见 deploy/nginx-novoard.conf）
+services:
+  novoord-hub:
+    build: ..
+    container_name: novoard-hub
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./.state:/app/.state
+    environment:
+      NOVOARD_RULES: /app/.state/rules.yaml   # 规则文件放运行态目录，热装载无需重打镜像
