@@ -58,7 +58,7 @@ nginx -t && systemctl reload nginx
 
 1. `curl -s http://127.0.0.1:38666/.well-known/agent-card.json` → 聚合 card（skills 空数组）
 2. mac-work lite-agent 启动 → 注册进 card、audit.jsonl 出现 working
-3. iOS 门（docs/guides/ios-shortcuts-trigger.md）：trigger → 202 submitted（蜂窝网络下走 HTTPS）
+3. 磁贴门（docs/guides/macos-tile-trigger.md）：trigger → 202 submitted（公网 HTTPS，桌面磁贴/终端脚本/Shortcuts App 三形态）
 4. 规则链路：trigger dev-build-investm → completed → smoke-test 自动入队（rules.yaml 放 .state）
 
 ## 五、回滚
