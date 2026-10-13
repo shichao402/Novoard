@@ -1,6 +1,6 @@
 # 契约定义（SSOT）
 
-- 版本：v1.0（评审定稿 · 冻结基线）。三项分岔决策 2026-10-12 用户确认：① A2A 字面对齐 + 私有信封；② research 0003 演进点全部 defer；③ schemas 目录随契约落库
+- 版本：v1.1（v1.0 评审定稿 · 冻结基线；v1.1 M2 增补：target `offline`/`offlineTtl` 字段、skill `x-novoard-offline` 透传、触发门 `queued-offline` 响应——全部向后兼容，次版本）。三项分岔决策 2026-10-12 用户确认：① A2A 字面对齐 + 私有信封；② research 0003 演进点全部 defer；③ schemas 目录随契约落库
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
@@ -41,6 +41,8 @@ targets:
 | `audit` | `none` / `summary` / `full` | 持久化待遇：不记 / 记起止与终态 / 记全步骤事件流 |
 | `requiresApproval` | `bool` | `true` 则 task 转 input-required，审批门沿链双向透传，IM/Web/磁贴任一入口可恢复 |
 | `notify` | `always` / `on-failure` / `never` | 终态通知扇出策略，定义时决定，运行时查表 |
+| `offline` | `reject` / `queue` | 成员离线时触发策略（M2）：`reject` 拒绝并通知；`queue` 入队带 TTL，成员上线后自动下发，TTL 到期转 failed 并通知。随 card 以 `x-novoard-offline` 透传（§2） |
+| `offlineTtl` | 时长字面（`30m` / `2h` / `1d`） | `offline: queue` 的等待上限，默认 `30m`；到期未上线转 failed，审计记 `offline-ttl-expired` |
 
 ### 1.2 steps 语法（契约内部化）
 
@@ -91,7 +93,7 @@ steps:
 }
 ```
 
-- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description = title + vars 参数说明
+- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description = title + vars 参数说明；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）
 - 聚合 card = 所有在线成员 card 的 skills 并集，附 `x-novoard-members` 扩展字段（member id → 寻址信息）；skill id 冲突时注册拒绝并回执，先到先得
 - card 经 JWS 签名（A2A 防伪造），密钥管理见 §8
 
@@ -199,6 +201,16 @@ POST /api/trigger
 ```
 
 fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 轮询纪律同理）。路由复用同一张查表：仅 `expose: a2a` 的 target 可触发，`expose: local` 返回 404 `target not remotely triggerable`。快捷指令与 bot 不升 A2A 客户端。
+
+成员离线时按 target `offline` 策略分流（§1.1，M2）：
+
+```json
+→ 202
+{ "taskId": "task-20261012-001", "state": "queued-offline", "reason": "member-offline", "expiresAt": "2026-10-12T09:30:00Z" }
+```
+
+- `reject`（默认）：不入队，202 `{ state: "rejected", reason: "member-offline" }` + 通知
+- `queue`：入队，202 `{ state: "queued-offline", reason: "member-offline", expiresAt }`；成员上线后自动下发，TTL 到期转 failed（审计 `offline-ttl-expired`）+ 通知
 
 ### 5.2 AI 客户端门 —— A2A 字面端点
 

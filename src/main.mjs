@@ -18,7 +18,7 @@ import { createRules } from "./rules.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
 
-export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, log = console } = {}) {
+export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, offlineSweepMs = 30_000, log = console } = {}) {
   mkdirSync(stateDir, { recursive: true });
   const auditDir = join(stateDir, "audit");
   const queueDir = join(stateDir, "queue");
@@ -36,6 +36,28 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
 
   let tunnelDelegate = async () => ({ ok: false, reason: "tunnel not ready" });
   const delegate = (args) => tunnelDelegate(args);
+
+  // ---- M2 离线队列：TTL sweeper + 成员上线补下发 ----
+  /** 成员上线（或离线任务 owner 恢复在线）后补下发其 queued-offline 任务（契约 §1.1 offline: queue）。 */
+  async function flushOfflineTasks(agentId) {
+    const pending = queue.pendingOffline().filter((t) => t.member === agentId);
+    for (const task of pending) {
+      const result = await delegate({ task, vars: task.vars });
+      audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "working", detail: { reason: `member-online flush：${agentId} 上线补下发` } }, validate.auditEvent);
+      log.info?.(`[offline-queue] ${agentId} 上线，补下发 ${task.id}（${result.ok ? "ok" : result.reason}）`);
+    }
+  }
+
+  /** TTL sweeper：queued-offline 到期转 failed + 审计 + 通知（offline-ttl-expired）。 */
+  function sweepOfflineQueue() {
+    for (const task of queue.pendingOffline()) {
+      if (!queue.isExpired(task)) continue;
+      queue.transition(task.id, "failed", { message: "offline-ttl-expired" });
+      audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "failed", detail: { reason: "offline-ttl-expired", expiresAt: task.expiresAt } }, validate.auditEvent);
+      notify.emit({ event: { kind: "terminal", taskId: task.id, target: task.target, state: "failed", reason: "offline-ttl-expired" } }).catch(() => {});
+      log.info?.(`[offline-queue] ${task.id} TTL 到期转 failed（offline-ttl-expired）`);
+    }
+  }
 
   // 规则引擎接终态事件：动作不旁路（PRD-3 F3），走 submit → delegate 全链路，actor 记 rule-engine
   const notifyAndRules = async ({ event }) => {
@@ -83,6 +105,23 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   const httpServer = await serverPromise;
   const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, secrets, validate, notify: notifyAndRules, log });
   tunnelDelegate = tunnel.delegate;
+
+  // 成员上线钩子：tunnel hello 注册成功后补下发该成员的 queued-offline 任务
+  tunnel.onMemberOnline = (agentId) => {
+    flushOfflineTasks(agentId).catch((error) => log.error?.(`[offline-queue] 补下发异常：${error.message}`));
+  };
+  // sweeper 定时器（hub 句柄关闭时清理）
+  const sweepTimer = setInterval(sweepOfflineQueue, offlineSweepMs);
+  sweepTimer.unref?.();
+
+  // 启动时扫尾：重启前留下的 queued-offline 任务，owner 在线则立即补下发，到期则转 failed
+  for (const task of queue.pendingOffline()) {
+    const owner = registry.resolve(task.skillId);
+    if (owner && owner.agentId === task.member) {
+      flushOfflineTasks(task.member).catch(() => {});
+    }
+  }
+  sweepOfflineQueue();
 
   // 企微 bot 通道：server 就绪后绑定本地端口（触发转发用），异步起长连接（失败不阻塞 hub）
   const listenPort = httpServer.address?.()?.port ?? port;

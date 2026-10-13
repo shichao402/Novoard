@@ -39,13 +39,13 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
   }
 
   function snapshot(task) {
-    const { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace } = task;
-    return { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace };
+    const { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt } = task;
+    return { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt };
   }
 
   return {
     /** 触发入队：生成 task id、建 task 对象、落盘、入索引。 */
-    submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [] }) {
+    submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "" }) {
       const id = `task-${new Date(now()).toISOString().slice(0, 10).replace(/-/g, "")}-${String(++seq).padStart(3, "0")}`;
       const ts = new Date(now()).toISOString();
       const task = {
@@ -62,6 +62,8 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         updatedAt: ts,
         requiresApproval,
         ruleTrace,
+        expiresAt,
+        queuedOfflineAt: expiresAt ? ts : "",
         status: { state: "submitted", timestamp: ts },
         artifacts: [],
         history: [
@@ -82,8 +84,36 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       task.state = state;
       task.updatedAt = ts;
       task.status = { state, timestamp: ts, ...extra };
+      if (TERMINAL_STATES.has(state) || state === "working") {
+        task.expiresAt = "";
+        task.queuedOfflineAt = "";
+      }
       persist(snapshot(task));
       return task;
+    },
+
+    /** 离线入队快照（M2）：queued-offline 状态 + expiresAt 留存（pendingOffline / sweeper 依赖）。 */
+    markQueuedOffline(taskId, expiresAtTs) {
+      const task = index.get(taskId);
+      if (!task) return null;
+      const ts = new Date(now()).toISOString();
+      task.state = "queued-offline";
+      task.updatedAt = ts;
+      task.expiresAt = new Date(expiresAtTs).toISOString();
+      task.status = { state: "queued-offline", timestamp: ts, message: "member-offline, queued with ttl" };
+      persist(snapshot(task));
+      return task;
+    },
+
+    /** 离线等待中任务清单（sweeper 周期扫描 + 成员上线补下发用）。 */
+    pendingOffline() {
+      return [...index.values()].filter((t) => t.state === "queued-offline");
+    },
+
+    /** TTL 到期判定（sweeper 用）：queued-offline 且 expiresAt 已过。 */
+    isExpired(task, at = Date.now()) {
+      if (task.state !== "queued-offline" || !task.expiresAt) return false;
+      return Date.parse(task.expiresAt) <= at;
     },
 
     /** 追加 artifact（契约 §7：A2A 车道产物）。 */

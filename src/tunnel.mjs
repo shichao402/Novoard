@@ -14,6 +14,8 @@ const PING_TIMEOUT_MS = 60_000;
 
 export function attachTunnel({ server, registry, queue, audit, secrets, validate, notify, log = console }) {
   const wss = new WebSocketServer({ noServer: true });
+  /** 成员上线钩子（M2）：main 装配层赋值 tunnel.onMemberOnline = fn 注入；hello 注册成功后调用。 */
+  const callbacks = { onMemberOnline: null };
 
   server.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url, "http://localhost");
@@ -142,6 +144,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         outcome: "completed",
         detail: { reason: `agent 注册：${body.card?.name ?? body.agentId}` },
       }, validate.auditEvent);
+      callbacks.onMemberOnline?.(body.agentId); // M2：离线队列补下发钩子（main 装配层注入）
       return;
     }
 
@@ -274,5 +277,5 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
     return String(version).split(".")[0];
   }
 
-  return { wss, delegate };
+  return { wss, delegate, set onMemberOnline(fn) { callbacks.onMemberOnline = fn; }, get onMemberOnline() { return callbacks.onMemberOnline; } };
 }

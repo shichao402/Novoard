@@ -34,7 +34,18 @@
         "expose": { "enum": ["a2a", "local"] },
         "audit": { "enum": ["none", "summary", "full"] },
         "requiresApproval": { "type": "boolean" },
-        "notify": { "enum": ["always", "on-failure", "never"] }
+        "notify": { "enum": ["always", "on-failure", "never"] },
+        "offline": {
+          "enum": ["reject", "queue"],
+          "default": "reject",
+          "description": "成员离线时触发策略（契约 §1.1，M2）：reject 拒绝；queue 入队等上线自动下发（TTL 到期转 failed）"
+        },
+        "offlineTtl": {
+          "type": "string",
+          "pattern": "^\\d+(s|m|h|d)$",
+          "default": "30m",
+          "description": "offline: queue 的等待上限，如 30m / 2h / 1d；到期未上线转 failed"
+        }
       },
       "additionalProperties": false
     },

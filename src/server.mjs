@@ -85,10 +85,9 @@ export function startServer({
     const owner = memberHint ? resolveWithMember(target, memberHint) : registry.resolve(target);
     if (!owner) {
       if (registry.knows(target)) {
-        // skill 存在但成员离线：受理 + rejected + 审计 + 通知扇出（PRD-3 US4 离线拒绝）
-        auditLine({ target, outcome: "rejected", detail: { reason: "member-offline" } }, actor, "a2a");
-        notify?.({ event: { kind: "offline-reject", target, reason: "member-offline" } });
-        sendJson(res, 202, { state: "rejected", reason: "member-offline" });
+        // skill 存在但成员离线：按 target offline 策略分流（契约 §5.1 / §1.1，M2）
+        const placed = placeOfflineTask({ target, memberHint, actor, vars, lane: "a2a" });
+        sendJson(res, 202, placed.body);
         return;
       }
       // 查无此 skill（含 expose: local：本地注册表有、聚合 card 无，查表自然 miss）
@@ -103,6 +102,35 @@ export function startServer({
     delegate?.({ task, vars }).catch((error) => {
       log.error?.(`下发失败 ${task.id}：${error.message}`);
     });
+  }
+
+  /**
+   * 离线策略分流（M2，契约 §1.1）：查 card 的 x-novoard-offline 扩展。
+   * reject（默认/未标注）：不入队，rejected + 审计 + 通知（PRD-3 US4 离线拒绝）。
+   * queue：submit 后 markQueuedOffline，expiresAt 按 offlineTtl（默认 30m）；
+   *        成员上线（tunnel hello 钩子）自动补下发，TTL 到期 sweeper 转 failed。
+   * 返回 202 响应体（两扇门共用）。
+   */
+  function placeOfflineTask({ target, memberHint = "", actor, vars = {}, lane = "a2a", contextId = "" }) {
+    const owned = registry.ownerOf(target);
+    const policy = owned?.skill?.["x-novoard-offline"]?.policy ?? "reject";
+    if (policy !== "queue") {
+      auditLine({ target, outcome: "rejected", detail: { reason: "member-offline" } }, actor, lane);
+      notify?.({ event: { kind: "offline-reject", target, reason: "member-offline" } });
+      return { body: { state: "rejected", reason: "member-offline" } };
+    }
+    const ttlMs = parseDuration(owned?.skill?.["x-novoard-offline"]?.ttl ?? "30m") ?? 30 * 60_000;
+    const task = queue.submit({ skillId: target, target, member: owned.agentId, vars, actor, lane, contextId });
+    queue.markQueuedOffline(task.id, Date.now() + ttlMs);
+    auditLine({ target, taskId: task.id, outcome: "submitted", detail: { reason: "member-offline-queued", ttl: owned?.skill?.["x-novoard-offline"]?.ttl ?? "30m" } }, actor, lane);
+    return { body: { taskId: task.id, state: "queued-offline", reason: "member-offline", expiresAt: queue.get(task.id).expiresAt } };
+  }
+
+  function parseDuration(literal) {
+    const m = String(literal ?? "").trim().match(/^(\d+)(s|m|h|d)$/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2]] * n;
   }
 
   /** A2A 门：JSON-RPC 2.0 三方法（message/stream M4，试点期明确 UNSUPPORTED）。 */
@@ -164,9 +192,13 @@ export function startServer({
       const owner = memberHint ? resolveWithMember(skillId, memberHint) : registry.resolve(skillId);
       if (!owner) {
         if (registry.knows(skillId)) {
-          auditLine({ target: skillId, outcome: "rejected", detail: { reason: "member-offline" } }, actor, "a2a");
-          notify?.({ event: { kind: "offline-reject", target: skillId, reason: "member-offline" } });
-          rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "成员离线，已拒绝");
+          // 成员离线：按 target offline 策略分流（契约 §5.1，M2）——queue 则入队返回 task，reject 则报错
+          const placed = placeOfflineTask({ target: skillId, memberHint, actor, vars: {}, lane: "a2a", contextId: typeof message.contextId === "string" ? message.contextId : "" });
+          if (placed.body.state === "queued-offline") {
+            rpcResult(res, rpc.id, queue.toA2A(placed.body.taskId));
+          } else {
+            rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "成员离线，已拒绝（target offline: reject）");
+          }
           return;
         }
         auditLine({ target: skillId, outcome: "rejected", detail: { reason: "no-such-skill" } }, actor, "a2a");

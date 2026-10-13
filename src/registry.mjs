@@ -86,6 +86,15 @@ export function createRegistry({ validate, log = console } = {}) {
       return member;
     },
 
+    /** skill 归属查询（不要求在线，M2）：offline 策略分流与离线入队定位 owner 用。 */
+    ownerOf(skillId) {
+      const agentId = skillIndex.get(skillId);
+      if (!agentId) return null;
+      const member = members.get(agentId);
+      if (!member) return null;
+      return { agentId, skill: member.skills.get(skillId) ?? null };
+    },
+
     /** skill 是否为已知能力（不要求在线）——离线拒绝与 404 的分流依据。 */
     knows(skillId) {
       return skillIndex.has(skillId);
