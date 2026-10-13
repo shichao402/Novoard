@@ -9,7 +9,7 @@ COPY src/ src/
 COPY docs/architecture/schemas/ docs/architecture/schemas/
 
 # 运行态走卷挂载：/app/.state（secrets/audit/queue/artifacts，契约 §6/§8）
-ENV NOVOARD_PORT=8787 NOVOARD_HOST=0.0.0.0
+ENV NOVOARD_PORT=38666 NOVOARD_HOST=0.0.0.0
 VOLUME ["/app/.state"]
-EXPOSE 8787
+EXPOSE 38666
 CMD ["npm", "start"]

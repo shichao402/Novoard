@@ -1,4 +1,4 @@
-# Novoard hub 单机部署（CVM 21.130.192.111，广州 9 区，DevCloud 内网资产）
+# Novoard hub 单机部署（CVM 43.138.156.146，腾讯云公有云广州，TencentOS 4）
 # nginx 不进 compose：hub 端口仅绑 127.0.0.1，由宿主机 nginx 子目录反代（见 deploy/nginx-novoard.conf）
 services:
   novoord-hub:
@@ -6,7 +6,7 @@ services:
     container_name: novoard-hub
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:38666:38666"
     volumes:
       - ./.state:/app/.state
     environment:

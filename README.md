@@ -48,7 +48,7 @@ M0（文档与契约）已收官；M1 试点接入进行中：hub 骨架已落�
 npm install                # 内网镜像
 npm run dev                # node --watch 热重载
 npm test                   # node --test
-NOVOARD_PORT=8787 npm start
+NOVOARD_PORT=38666 npm start
 ```
 
 目录约定：`.state/`（hub 运行态，不进 git）下 `secrets.json`、`audit/`、`queue/`、`artifacts/`；`.agent-state/`（lite-agent 运行态）下 `audit.jsonl`、`replay.jsonl`。端点：`/`（dashboard）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（快捷指令门）。

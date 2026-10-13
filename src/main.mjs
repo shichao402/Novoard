@@ -17,7 +17,7 @@ import { createRules } from "./rules.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
 
-export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 8787), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, log = console } = {}) {
+export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, log = console } = {}) {
   mkdirSync(stateDir, { recursive: true });
   const auditDir = join(stateDir, "audit");
   const queueDir = join(stateDir, "queue");
@@ -98,7 +98,7 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
 
 export function main() {
   createHub().then((hub) => {
-    const port = hub.server.address?.().port ?? process.env.NOVOARD_PORT ?? 8787;
+    const port = hub.server.address?.().port ?? process.env.NOVOARD_PORT ?? 38666;
     console.log(`Novoard hub 已启动：http://0.0.0.0:${port}`);
     console.log("  dashboard: /    tunnel: /tunnel (ws)    a2a: /a2a    card: /.well-known/agent-card.json");
     const pending = hub.queue.pendingAfterReboot();
