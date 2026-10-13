@@ -3,8 +3,8 @@
 - 版本：v0.1
 - 状态：Draft
 - 契约引用：[contracts §4 §5](../architecture/contracts.md)
-- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0003](../adr/0003-hub-and-spoke-agent-egress.md)
-- 载体：Novoard 仓（hub 服务 + Web 面板）；agent 侧连接器在 cronkit 仓
+- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0003](../adr/0003-hub-and-spoke-agent-egress.md) [0007](../adr/0007-cronkit-as-reference-only.md)
+- 载体：Novoard 仓（hub 服务 + Web 面板）；agent 侧连接器在各 agent 实现（首批为 Mac lite-agent × 2 与内网 lite-agent，cronkit 为参照原型；核心能力由 PRD-5 试点提前踩点）
 
 ## 背景
 

@@ -11,6 +11,8 @@
 | [0003](0003-hub-and-spoke-agent-egress.md) | hub-and-spoke 拓扑与 agent 主动外连 | Accepted | 2026-10-12 |
 | [0004](0004-a2a-as-common-language.md) | A2A 作为全系统通用语 | Accepted | 2026-10-12 |
 | [0005](0005-route-by-definition-table-lookup.md) | 定义时判断，路由只查表 | Accepted | 2026-10-12 |
+| [0006](0006-tech-stack-baseline.md) | 技术栈基线：Node hub 与 lite-agent | Proposed | 2026-10-12 |
+| [0007](0007-cronkit-as-reference-only.md) | cronkit 退位为参考实现 | Proposed | 2026-10-12 |
 
 ## 约定
 

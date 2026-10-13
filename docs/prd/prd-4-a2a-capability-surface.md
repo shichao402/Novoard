@@ -3,12 +3,12 @@
 - 版本：v0.1
 - 状态：Draft
 - 契约引用：[contracts §2 §4](../architecture/contracts.md)
-- 相关 ADR：[0004](../adr/0004-a2a-as-common-language.md) [0005](../adr/0005-route-by-definition-table-lookup.md)
-- 载体：Novoard 仓（hub A2A server + 网关）；agent 侧 card 与 localhost 端点在 cronkit 仓
+- 相关 ADR：[0004](../adr/0004-a2a-as-common-language.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0007](../adr/0007-cronkit-as-reference-only.md)
+- 载体：Novoard 仓（hub A2A server + 网关）；agent 侧 card 与 localhost 端点在各 agent 实现（cronkit 为参照原型，ADR-0007）。A2A 端点最小版（card 聚合、message/send、tasks/get、tasks/cancel）提前至试点（PRD-5 F6），stream 与审批门全链路留本 PRD 完备化。
 
 ## 背景
 
-用户日常在 IM 里与 AI 助手（With 等）协作。"AI 帮我触发部署 / 巡检"是价值闭环最近的一条路：AI 读取能力声明自行决定调用，hub 零 LLM。A2A 是全系统通用语（hub ↔ cronkit 之间即是 A2A），对外能力面是同一协议的自然延伸。
+用户日常在 IM 里与 AI 助手（With 等）协作。"AI 帮我触发部署 / 巡检"是价值闭环最近的一条路：AI 读取能力声明自行决定调用，hub 零 LLM。A2A 是全系统通用语（hub ↔ agent 之间即是 A2A），对外能力面是同一协议的自然延伸。
 
 ## 目标用户
 
@@ -47,9 +47,9 @@
 - 网关维护"哪个 A2A 客户端能打哪个成员/哪类 skill"的授权表，定义时维护（白名单数据），运行时查表。
 - 成员 card JWS 签名验证；agent token 与 A2A 客户端 key 分离。
 
-### F5 agent 侧 localhost A2A（cronkit 仓实现）
+### F5 agent 侧 localhost A2A（桌面 agent 载体实现，参照 cronkit；随 M5 载体决策排期）
 
-- cronkit 起 localhost A2A 端点，磁贴/热键即本机 A2A 客户端（实现允许内部 IPC 起步，语义对齐契约）。
+- 桌面 agent 起 localhost A2A 端点，磁贴/热键即本机 A2A 客户端（实现允许内部 IPC 起步，语义对齐契约）。
 - hub 断连时 localhost 端点完整可用（离线优先）。
 
 ## 非功能需求
@@ -68,4 +68,4 @@
 ## 范围外
 
 - 多租户（A2A v1.0 多逻辑 card）：单用户系统暂不需要。
-- AI 客户端侧的实现（With 如何成为 A2A client 是对方的事，本仓只保证门开着）。
+- AI 客户端侧的实现（With 如何成为 A2A client 是对方的事，本仓只保证门开着；试点期 With 以"轮询 + 通知"模式消费，见 PRD-5 F6）。

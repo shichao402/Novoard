@@ -1,18 +1,3 @@
-# OS / editor noise
-.DS_Store
-Thumbs.db
-*.swp
-.idea/
-.vscode/
-# Node
-node_modules/
-dist/
-build/
-*.log
-# Local env & secrets
-.env
-.env.*
-secrets/
-config.local.yaml
-# Test coverage
-coverage/
+# 本地运行态（hub 数据卷，不进 git）
+.state/
+*.local.json

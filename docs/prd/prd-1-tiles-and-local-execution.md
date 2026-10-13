@@ -3,12 +3,12 @@
 - 版本：v0.1
 - 状态：Draft
 - 契约引用：[contracts §1](../architecture/contracts.md)
-- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0005](../adr/0005-route-by-definition-table-lookup.md)
-- 载体：cronkit 仓（本 PRD 描述的能力全部落在 cronkit 侧演进，Novoard 仓只持有需求定义）
+- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0007](../adr/0007-cronkit-as-reference-only.md)
+- 载体：待定（ADR-0007 后 cronkit 仅为能力参照原型）。托盘/热键/磁贴浮窗需桌面常驻进程载体，载体决策后启动（roadmap M5）；契约字段（expose/audit/requiresApproval/notify）、builtin/open-app 与 stepTemplates 不依赖桌面 UI，已由试点接入（PRD-5）部分吸收。
 
 ## 背景
 
-用户有大量开发项目，其中不少需要"随时部署安装到本地自己体验"。现状是每次都要找部署脚本、跑命令、开实例，摩擦大。cronkit 已具备执行内核（targets → steps）、manual trigger、stepTemplates 参数化模板，缺的是零查找成本的入口形态。
+用户有大量开发项目，其中不少需要"随时部署安装到本地自己体验"。现状是每次都要找部署脚本、跑命令、开实例，摩擦大。cronkit（参考原型）已具备执行内核（targets → steps）、manual trigger、stepTemplates 参数化模板，缺的是零查找成本的入口形态。本文各能力项以 cronkit 为参照原型描述，实现载体不限。
 
 ## 目标用户
 
@@ -25,7 +25,7 @@
 
 ## 功能需求
 
-### F1 磁贴视图（cronkit Dashboard 改造）
+### F1 磁贴视图（Dashboard 改造，参照 cronkit Dashboard 原型）
 
 - Dashboard 增加"快捷操作"分区，manual target 以磁贴（卡片）呈现，替代当前纯行列表的查找路径。
 - 磁贴信息：图标、title、状态点（idle/running/succeeded/failed）、上次执行时间。
@@ -50,7 +50,7 @@
 ### F5 stepTemplates 收编部署脚本
 
 - 提供内置模板集（deploy-webapp、open-instance 等），用户项目只需引用模板 + vars。
-- 模板仓库位置与共享方式沿用 cronkit 既有 stepTemplates 机制。
+- 模板仓库位置与共享方式参照 cronkit 既有 stepTemplates 机制。
 
 ## 非功能需求
 
@@ -66,5 +66,5 @@
 
 ## 范围外
 
-- 远程触发（PRD-2）、通知（PRD-3）、AI 委派（PRD-4）。
+- 远程触发（PRD-2）、通知（PRD-3）、AI 委派（PRD-4）、试点接入（PRD-5）。
 - iOS 式事件自动化触发器（时间外的触发器类型，见 PRD-3 远期）。

@@ -1,65 +1,69 @@
 # Roadmap
 
-里程碑按"先本地价值、再远程底座、再通知闭环、最后 AI 面"排序，每个里程碑独立可交付、可验收。
+里程碑排序（ADR-0007 重排）：试点接入先行，用真实点位验证契约与 PRD-2/3/4 验收面；随后逐域完备化；桌面本地体验（原 M1，载体原定 cronkit 仓）因载体未定后置为 M5。每个里程碑独立可交付、可验收。
 
-## M0 · 契约与文档（当前）
+## M0 · 契约与文档（收官 2026-10-12；当前推进 M1）
 
 - [x] 仓库与文档骨架（ADR / architecture / roadmap / PRD / research）
-- [x] 五条 ADR 定型（边界、拓扑、A2A 通用语、路由纪律）
+- [x] 七条 ADR 定型（边界、拓扑、A2A 通用语、路由纪律、技术栈基线、cronkit 参照位）
 - [x] 契约草案 v0.1（target schema、ops 帧枚举、隧道协议、HTTP 门、审计）
-- [x] PRD 拆分（PRD-1 ~ PRD-4）
-- [ ] 契约 v0.1 评审定稿（用户确认后转 Accepted，实现冻结基线）
+- [x] PRD 拆分（PRD-1 ~ PRD-5）与扩展调研（research 0003/0004）
+- [x] 契约 v1.0 评审定稿（三决策拍板：A2A 字面对齐 + 私有信封 / research 0003 演进点 defer / schemas 落库；九张 JSON Schema 随契约冻结，实现冻结基线）
 
-## M1 · 磁贴与本地执行（PRD-1，cronkit 仓）
+## M1 · 试点接入与 hub 起步（PRD-5 + PRD-2 核心，Novoard 仓与试点环境）
 
-目标：人在电脑前的场景闭环——点磁贴完成部署并在固定实例打开。
+目标：三个真实接入跑通——企微 bot、dev builder（Mac lite-agent × 2）、内网周报 agent——PRD-2/3/4 的验收面获得真实踩点，并验证契约实现无关性（办公 Mac 与内网服务器两套独立实现）。
 
-- [ ] Dashboard"快捷操作"磁贴分区（数据源本地注册表）
-- [ ] `builtin/open-app` 一等步骤
-- [ ] 部署类 stepTemplates 收编（deploy-webapp 等）
-- [ ] target 定义新增 `expose / audit / requiresApproval / notify` 契约字段（对齐 contracts §1）
-- [ ] 全局热键浮窗
-- [ ] 托盘快捷菜单
-- 验收：PRD-1 AC1-AC4
+- [x] hub 服务骨架（Node，issue-handler DNA：统一 server、JSONL 流水、dashboard、凭据热配置；实测同款定稿：原生 `node:http` + `ws`，零 web 框架，纯 JS ESM 零构建——ADR-0006。2026-10-12 落地：src/ 八模块 + 11 项冒烟测试全绿——两扇门、WS 隧道、JSONL 审计/队列双文件、联邦注册表、聚合 card、msgId 幂等去重、断线转离线）
+- [x] target 定义先行（零代码）：三份 target YAML + 共用 stepTemplate。2026-10-13 落库 `agents/`：mac-work / mac-home / intranet-weekly 各 targets.yaml + 模板（两台 Mac 共用 deploy-webapp，vars 填机器差异），schema 校验 5 项测试全绿（test/targets.test.mjs）
+- [ ] CVM 部署（Docker，nginx 子目录反代；企微 bot 同机或独立轻服务）
+- [x] 联邦注册表与任务队列（A2A 字面帧 + 私有信封，契约 §4；队列持久化定稿：JSONL 文件队列 append-only + 重启扫尾重放，hub 依赖保持 ws / yaml / ajv 三个——ADR-0006；contextId 回带与父任务关联从第一天对齐）。2026-10-12 随 hub 骨架落地：JSONL append-only + 重启扫尾重放、msgId 幂等窗口、注册表离线留表（test/hub.test.mjs 队列/注册表四项）
+- [ ] 三接入：企微 bot / Mac lite-agent × 2 / 内网周报 lite-agent（内网策略审批提前走）。lite-agent 语言定稿：Node，`src/lite-agent/` 同仓实现，模块级复用 hub 侧 frames/tunnel/schema 自检（ADR-0006，2026-10-13）。2026-10-13 lite-agent 已落地：config/card/runner/agent-runtime/tunnel-client/main 六模块（模板展开、四类 step、单并发、断线重连 + 未确认帧重放、agent 侧审计 JSONL），e2e 3 项全绿（test/lite-agent.test.mjs）——注册 → 触发 → 委派 → 执行 → 终态上行 → 两侧审计全链路；剩部署动作（两台 Mac + 内网服务器跑起来 + token 分发）
+- [x] A2A 端点最小版：Agent Card 聚合发布、message/send、tasks/get、tasks/cancel（stream 以轮询 + 通知顶替）；授权矩阵最小版（With 一把 key）；实现定稿：自实现原生端点，零 SDK（ADR-0006；A2A spec 正式版后再评估跟进）。2026-10-12 随 hub 骨架落地：三方法 + 错误码字面（-32000/-32001/-32002/-32004）、无 key 401、聚合 card 经 `/.well-known/agent-card.json` 发布（test/hub.test.mjs A2A 两项）
+- [x] 通知扇出最小版：企微终态 / 审批门 / 离线拒绝。2026-10-13 落地 src/notify.mjs：企微 markdown 三模板（终态图标、input-required、offline-reject）+ 同 target 同态 60s 频控窗口合并 + webhook 未配置降级日志不阻塞；main.mjs 装配事件扇出，测试 5 项（test/notify-rules.test.mjs）
+- [x] 最小规则引擎：task 终态事件 → run target（进阶：GitHub push webhook → 自动构建）。2026-10-13 落地 src/rules.mjs：rules.yaml 装载即校验（定义时判断）、终态匹配、ruleTrace 防环；动作不旁路——经 queue.submit → delegate 全链路下发（actor=rule-engine，审计 detail 记规则触发）；e2e 验证 completed → smoke-test 自动入队执行（进阶 webhook 源留 M3 通用入口）
+- [ ] iOS 快捷指令门（fire-and-forget）
+- 验收：PRD-5 AC1-AC7（AC8 两段式可选）
+- 说明：原 M2 的队列与 iOS 门前移至此；原 M4 的 A2A 端点最小版提前触达，stream 与审批门全链路仍留 M4。
 
-## M2 · Hub 与远程触发（PRD-2，Novoard 仓）
+## M2 · Hub 完备与远程触发（PRD-2，Novoard 仓）
 
-目标：人不在电脑前的场景闭环——手机触发 Mac，Web 面板全局可见。
+目标：人不在电脑前的场景闭环正式化。
 
-- [ ] hub 服务骨架（Node，issue-handler DNA：统一 server、JSONL 流水、dashboard、凭据热配置）
-- [ ] agent 连接器（cronkit 侧：出站 WebSocket、agent.hello 注册、心跳重连）
-- [ ] 任务队列与分发（离线拒绝 + 通知）
 - [ ] Web 面板 v1（agent 列表、target 目录、任务历史、触发入口）
-- [ ] iOS 快捷指令门（fire-and-forget HTTPS）
-- [ ] CVM 部署（Docker，nginx 子目录反代，目录挂载）
+- [ ] 离线拒绝与任务分发策略正式化（试点已踩点）
 - 验收：PRD-2 AC1-AC4
-- 说明：本里程碑内部链路允许简化为"A2A 语义、私有帧起步"，但契约 §4 的帧语义（contextId 回带、父任务关联）从第一天就按 A2A 语义设计，避免日后协议迁移成本。
 
-## M3 · 通知与自动化规则（PRD-3，Novoard 仓）
+## M3 · 通知与自动化规则完备化（PRD-3，Novoard 仓）
 
-目标：结果主动找人；事件驱动操作。
-
-- [ ] 企微 / Bark 通知扇出（终态、审批门、离线拒绝）
-- [ ] per-target `notify` 策略字段生效（契约 §1 扩展）
+- [ ] 企微 / Bark 扇出完备（终态、审批门、离线拒绝；Bark 双推试点已踩）
+- [ ] per-target `notify` 策略字段生效（契约 §1）
 - [ ] 通知频控（状态口径，防 digest 吞增量）
-- [ ] 自动化规则引擎（when event then run target）
-- [ ] 通用 webhook 入口
+- [ ] 规则引擎完备化 + 通用 webhook 入口（最小版试点已踩）
 - 验收：PRD-3 AC1-AC3
 
-## M4 · A2A 能力面（PRD-4，两仓）
+## M4 · A2A 能力面完备化（PRD-4，hub + agent 侧）
 
-目标：AI 客户端安全接入，全系统讲同一种话。
-
-- [ ] hub Agent Card 聚合 + JWS 签名 + `/.well-known` 发布
-- [ ] A2A 端点（message/send · stream · tasks/get · cancel）
-- [ ] 审批门全链路透传（IM / Web / 磁贴三入口恢复）
-- [ ] 授权矩阵
-- [ ] cronkit localhost A2A 端点（磁贴走 A2A 语义）
-- [ ] 首个真实 A2A 客户端接入验证（With 或 Claude Code）
+- [ ] message/stream（SSE 步骤级进度，替换试点期"轮询 + 通知"顶替方案）
+- [ ] 审批门全链路（IM / Web / 磁贴三入口恢复、超时 TTL）
+- [ ] 授权矩阵完备化（试点最小版扩展）
+- [ ] 桌面 agent localhost A2A 端点（随 M5 载体决策）
+- [ ] 更多 A2A 客户端接入验证
 - 验收：PRD-4 AC1-AC4
+
+## M5 · 桌面 agent 与本地磁贴（PRD-1，载体待定）
+
+后置说明：托盘 / 热键 / 磁贴浮窗必须长在桌面常驻进程（Electron 一类）上；ADR-0007 后 cronkit 仅为参照原型，Mac 桌面载体三候选（移植 cronkit Electron / 新写轻壳 / Raycast 类启动器顶替）待试点数据后决策。契约字段、builtin/open-app、stepTemplates 已在 M1 试点部分吸收。
+
+- [ ] 载体决策 ADR（三候选对比，以试点期触发数据为输入）
+- [ ] Dashboard"快捷操作"磁贴分区 / 全局热键浮窗 / 托盘快捷菜单
+- [ ] builtin/open-app 一等步骤正式化（试点已踩）
+- [ ] 部署类 stepTemplates 收编
+- 验收：PRD-1 AC1-AC4
 
 ## 里程碑之外（暂不排期）
 
-- 第二台 agent（家里服务器）——M2 架构天然支持，接入是运维动作不是开发项。
-- Tailscale 直连替代 relay 隧道——等 relay 痛点真实出现。
-- 事件触发器扩展（位置、NFC、app 状态类 iOS 自动化）——YAGNI 区。
+- cronkit Windows 机器收编为成员（属"收编"非"试点"，规模另立，见 research 0004）
+- 新 agent 接入（家里服务器等）——架构天然支持，接入是运维动作不是开发项
+- Tailscale 直连替代 relay 隧道——等 relay 痛点真实出现
+- 事件触发器扩展（位置、NFC、app 状态类 iOS 自动化）——YAGNI 区

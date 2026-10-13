@@ -1,0 +1,14 @@
+# stepTemplate：run-weekly-report（内网周报 agent 专用）
+# autoworks 命令化姿势（research 0004）：单入口、幂等、退出码带语义、结果落 artifact
+# 周报产物 artifact 上 hub 存证（契约 §7）：lite-agent 执行完按 outDir 内最新产物走上传端点
+
+vars:
+  repoDir: /srv/autoworks
+  outDir: /srv/autoworks/out
+
+steps:
+  - script: git -C "{{repoDir}}" pull --ff-only
+  - script: ./report.py --out "{{outDir}}"
+    cwd: "{{repoDir}}"
+    env:
+      AUTOWORKS_RUN_MODE: novoard-target
