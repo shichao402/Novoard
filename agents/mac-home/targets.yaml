@@ -14,3 +14,5 @@ targets:
     audit: summary
     requiresApproval: false
     notify: always
+    offline: queue          # M2：离线触发不拒绝，入队等本机上线自动补下发
+    offlineTtl: 2h
