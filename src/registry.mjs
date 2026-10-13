@@ -113,6 +113,16 @@ export function createRegistry({ validate, log = console } = {}) {
       }));
     },
 
+    /** target 目录（面板 v1 /api/targets 用）：按成员分组，含离线成员（card 留表）。 */
+    catalog() {
+      return [...members.values()].map((m) => ({
+        agentId: m.agentId,
+        name: m.card.name,
+        online: !!m.conn,
+        skills: [...m.skills.values()],
+      }));
+    },
+
     /** 聚合 Agent Card（契约 §2）：skills 并集 + x-novoard-members。 */
     aggregateCard() {
       const skills = [];

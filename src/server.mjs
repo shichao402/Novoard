@@ -336,6 +336,15 @@ export function startServer({
         return;
       }
 
+      if (req.method === "GET" && pathname === "/api/targets") {
+        if (!authorizeClient(req)) {
+          sendJson(res, 401, { error: "unauthorized" });
+          return;
+        }
+        sendJson(res, 200, { catalog: registry.catalog() });
+        return;
+      }
+
       if (req.method === "GET" && pathname === "/api/tasks") {
         if (!authorizeClient(req)) {
           sendJson(res, 401, { error: "unauthorized" });

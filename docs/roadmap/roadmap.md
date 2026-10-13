@@ -31,7 +31,7 @@
 目标：人不在电脑前的场景闭环正式化。
 
 - [x] 离线拒绝与任务分发策略正式化（试点已踩点）。2026-10-13 落地 queue-with-ttl（契约 v1.0 → v1.1，次版本向后兼容）：target 新增 `offline: reject|queue` + `offlineTtl`（默认 30m），策略经 skill `x-novoard-offline` 扩展随 card 透传（hub 路由离线分流查此字段，ADR-0005 查表纪律延伸）；`queue` 策略下离线触发 202 `queued-offline` + expiresAt 入队，成员 hello 上线钩子自动补下发（tunnel onMemberOnline → flushOfflineTasks），TTL sweeper 到期转 failed（审计 `offline-ttl-expired`）+ 通知；hub 重启扫尾：queued-offline 恢复后 owner 在线立即补下发。测试 9 项（test/offline-queue.test.mjs：单元/reject 不变/入队/上线补下发/TTL/sweeper/A2A 门/真实 WS 链路/重启重放），全量 41/41 绿
-- [ ] Web 面板 v1（agent 列表、target 目录、任务历史、触发入口）
+- [x] Web 面板 v1（agent 列表、target 目录、任务历史、触发入口）。2026-10-13 落地：target 目录按成员分组（离线成员灰显可见，`/api/targets` 新端点 + registry.catalog()）、任务历史升级为可展开详情（状态/耗时/触发者/artifacts 链接/history 流水）、触发入口支持成员选择（datalist 自动补全 + 下拉）、queued-offline 状态徽标与等待截止时间展示；单页零构建零外部资源不变（issue-handler dashboard 模式）。测试 3 项（test/dashboard.test.mjs），全量 44/44 绿
 - 验收：PRD-2 AC1-AC4
 
 ## M3 · 通知与自动化规则完备化（PRD-3，Novoard 仓）
