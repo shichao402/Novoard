@@ -22,7 +22,7 @@
 - [x] A2A 端点最小版：Agent Card 聚合发布、message/send、tasks/get、tasks/cancel（stream 以轮询 + 通知顶替）；授权矩阵最小版（With 一把 key）；实现定稿：自实现原生端点，零 SDK（ADR-0006；A2A spec 正式版后再评估跟进）。2026-10-12 随 hub 骨架落地：三方法 + 错误码字面（-32000/-32001/-32002/-32004）、无 key 401、聚合 card 经 `/.well-known/agent-card.json` 发布（test/hub.test.mjs A2A 两项）
 - [x] 通知扇出最小版：企微终态 / 审批门 / 离线拒绝。2026-10-13 落地 src/notify.mjs：企微 markdown 三模板（终态图标、input-required、offline-reject）+ 同 target 同态 60s 频控窗口合并 + webhook 未配置降级日志不阻塞；main.mjs 装配事件扇出，测试 5 项（test/notify-rules.test.mjs）
 - [x] 最小规则引擎：task 终态事件 → run target（进阶：GitHub push webhook → 自动构建）。2026-10-13 落地 src/rules.mjs：rules.yaml 装载即校验（定义时判断）、终态匹配、ruleTrace 防环；动作不旁路——经 queue.submit → delegate 全链路下发（actor=rule-engine，审计 detail 记规则触发）；e2e 验证 completed → smoke-test 自动入队执行（进阶 webhook 源留 M3 通用入口）
-- [ ] iOS 快捷指令门（fire-and-forget）
+- [~] iOS 快捷指令门（fire-and-forget）。hub 侧 `/api/trigger` + 离线拒绝分流已就绪（test/hub.test.mjs trigger 项）；Shortcuts 配置文档已落库 docs/guides/ios-shortcuts-trigger.md；剩真机磁贴验收，依赖三环境部署（对着离线 Mac B 触发 → 30s 内离线拒绝通知）
 - 验收：PRD-5 AC1-AC7（AC8 两段式可选）
 - 说明：原 M2 的队列与 iOS 门前移至此；原 M4 的 A2A 端点最小版提前触达，stream 与审批门全链路仍留 M4。
 
