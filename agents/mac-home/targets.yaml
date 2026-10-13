@@ -8,7 +8,7 @@ targets:
     template: deploy-webapp
     vars:
       repo: InvestM
-      repoDir: ~/code/InvestM
+      repoDir: /Users/firoyang/workspace/InvestM
       port: 5173
     expose: a2a
     audit: summary

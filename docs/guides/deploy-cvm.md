@@ -77,5 +77,7 @@ docker compose down   # .state 卷保留全部审计/队列/secrets，容器可�
 
 已完成：DNS → rsync → 容器（127.0.0.1:38666）→ certbot 证书 → nginx 443 → 公网全链路验证。
 e2e 闭环已通：mac-work 注册 → trigger（HTTPS）→ agent 执行 → completed 终态回传 → 双侧审计对账。
+
+mac-home 接入（2026-10-13，与 mac-work 同机双实例，用户决策）：配置与 state 独立目录 `~/Library/Application Support/novoard/agent-mac-home/`（agent.json 0600 + audit），launchd 常驻 `com.firoyang.novoard.agent.mac-home`（RunAtLoad + KeepAlive），环境变量 `NOVOARD_AGENT_DIR=/Users/firoyang/workspace/Novoard/agents/mac-home`。验证：task-20261013-001 公网触发真实执行，working→failed（InvestM 未提交改动，真实仓库状态），双侧审计一致。家里 Mac 到位后改 repoDir + agentDir 即可迁移。
 部署中修复三个缺陷：secrets.mjs 对象形态归一化、agent 配置 contractVersion（v1.0→1.0）、runner script 步骤插值缺失（均带回归测试）。
 运维注意：nginx WS 升级用 `00-novoard-map.conf` 的 map 变量；certbot 续期依赖既有 systemd timer；磁盘 83% 水位需留意。
