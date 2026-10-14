@@ -1,10 +1,10 @@
 # PRD-1: 磁贴面板与本地执行
 
-- 版本：v0.1
-- 状态：Draft
+- 版本：v0.2
+- 状态：M5 已落地（2026-10-14，roadmap 记录见 [roadmap M5](../roadmap/roadmap.md)）；载体 [ADR-0008](../adr/0008-desktop-shell-decision.md) 已决策
 - 契约引用：[contracts §1](../architecture/contracts.md)
-- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0007](../adr/0007-cronkit-as-reference-only.md)
-- 载体：待定（ADR-0007 后 cronkit 仅为能力参照原型）。托盘/热键/磁贴浮窗需桌面常驻进程载体，载体决策后启动（roadmap M5）；契约字段（expose/audit/requiresApproval/notify）、builtin/open-app 与 stepTemplates 不依赖桌面 UI，已由试点接入（PRD-5）部分吸收。
+- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0007](../adr/0007-cronkit-as-reference-only.md) [0008](../adr/0008-desktop-shell-decision.md)
+- 载体：已决策（ADR-0008）——agent 进程内 localhost Web 面板 + PWA 磁贴 + Shortcuts.app 热键兜底。托盘降级为可选项不进 M5 交付。
 
 ## 背景
 

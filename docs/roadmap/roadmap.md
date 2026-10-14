@@ -58,13 +58,17 @@
 
 ## M5 · 桌面 agent 与本地磁贴（PRD-1，载体待定）
 
-后置说明：托盘 / 热键 / 磁贴浮窗必须长在桌面常驻进程（Electron 一类）上；ADR-0007 后 cronkit 仅为参照原型，Mac 桌面载体三候选（移植 cronkit Electron / 新写轻壳 / Raycast 类启动器顶替）待试点数据后决策。契约字段、builtin/open-app、stepTemplates 已在 M1 试点部分吸收。
+后置说明：托盘 / 热键 / 磁贴浮窗必须长在桌面常驻进程上；ADR-0007 后 cronkit 仅为参照原型。载体已于 2026-10-14 决策：[ADR-0008](../adr/0008-desktop-shell-decision.md) 新写轻壳（agent 进程内 localhost Web 面板 + PWA 磁贴 + Shortcuts.app 热键兜底），Electron/Raycast 否决（试点数据：human 触发日均 1-2 次、高频 target 集中 dev-build-investm，配不上独立桌面运行时）。
 
-- [ ] 载体决策 ADR（三候选对比，以试点期触发数据为输入）
-- [ ] Dashboard"快捷操作"磁贴分区 / 全局热键浮窗 / 托盘快捷菜单
-- [ ] builtin/open-app 一等步骤正式化（试点已踩）
-- [ ] 部署类 stepTemplates 收编
-- 验收：PRD-1 AC1-AC4
+2026-10-14 落地并线上验收（commit 7f08013）：
+
+- [x] 载体决策 ADR（三候选对比，以试点期触发数据为输入）→ ADR-0008（含 116 条审计事件触发画像：human 11 条、dev-build-investm 占 64%、全部经 Web 面板 3-5 次点击）
+- [x] 桌面 agent localhost A2A 端点（M4 遗留项收口）：`src/lite-agent/local-a2a.mjs`——127.0.0.1:39871 同进程 HTTP：`POST /a2a`（message/send 直连本地 runtime、tasks/get/cancel/approve）+ `GET /api/tiles`（磁贴数据源）+ `GET /api/stream/:id`（SSE 步骤进度）+ 零构建磁贴页（PWA manifest、状态点/上次时间 US5、toast、4s 轮询刷新）。本地闭环（AC2）：hub 离线时触发照常；hub 在线时终态 `task-local-*` 镜像帧上行，hub ack + 落审计（detail.via=tile-local-mirror），agent replay 缓存可清
+- [x] builtin/open-app 一等步骤正式化（试点已踩，M1 schema/runner 一等，本轮收编进 open-instance 模板验证）
+- [x] 部署类 stepTemplates 收编：新增 `open-instance` 内置模板（health + openApp 两步）+ mac-home targets 引用试点（open-investm）
+- [ ] Dashboard"快捷操作"磁贴分区 / 全局热键浮窗 / 托盘快捷菜单——热键按 ADR-0008 用 Shortcuts.app 兜底（一次性配置，用户侧操作）；托盘降级可选不进交付；hub Dashboard 磁贴分区待做（磁贴已在 agent localhost 面板实现，hub 侧为远程视图延后）
+- 验收：AC1 过（磁贴触发 smoke-test → completed → 状态点刷新，真机 39871）；AC2 过（本地闭环测试 + 线上 hub ack 链路）；AC3 过（open-investm 一份 YAML 引模板，装载即用）；AC4 过（SSE 终态即刷新 + 4s 轮询兜底）。测试 65/65 绿（+7 M5：磁贴触发/SSE/审批/取消/本地闭环/模板/镜像链路）
+- 修复沉淀：tunnel pingTimer / 重连退避 setTimeout / agent waitTimer 未 unref 挡进程退出（潜伏数轮，本轮全清）；createLiteAgent localA2A 句柄泄漏 → agent.stop() 统一停机；旧 replay 缓存 local- 脏帧清理
 
 ## 里程碑之外（暂不排期）
 
