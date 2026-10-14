@@ -8,6 +8,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -224,4 +225,20 @@ test("M6F2 sameOrigin 导出：跨源 Host 拒绝，本机回环放行", () => {
   assert.equal(sameOrigin({ headers: { host: "localhost:39870" } }), true);
   assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://127.0.0.1:39870" } }), true);
   assert.equal(sameOrigin({ headers: { host: "127.0.0.1:39870", origin: "http://evil.example.com" } }), false);
+});
+
+test("M6F2 回归：/setup 向导页内嵌 JS 语法可解析（三页面全覆盖的最后一页）", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "novoard-f2wizp-"));
+  let wizard = null;
+  try {
+    wizard = createSetupWizard({ dir, port: 0, onReady: async () => {}, log: { info() {} } });
+    const addr = await wizard.start();
+    const html = await (await fetch(`http://127.0.0.1:${addr.port}/setup`)).text();
+    const m = html.match(/<script>([\s\S]*)<\/script>/);
+    assert.ok(m, "向导页应有内嵌 script 块");
+    assert.doesNotThrow(() => new vm.Script(m[1]), "向导页内嵌 JS 必须可被解析");
+  } finally {
+    await wizard?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
