@@ -70,6 +70,18 @@
 - 验收：AC1 过（磁贴触发 smoke-test → completed → 状态点刷新，真机 39871）；AC2 过（本地闭环测试 + 线上 hub ack 链路）；AC3 过（open-investm 一份 YAML 引模板，装载即用）；AC4 过（SSE 终态即刷新 + 4s 轮询兜底）。测试 65/65 绿（+7 M5：磁贴触发/SSE/审批/取消/本地闭环/模板/镜像链路）
 - 修复沉淀：tunnel pingTimer / 重连退避 setTimeout / agent waitTimer 未 unref 挡进程退出（潜伏数轮，本轮全清）；createLiteAgent localA2A 句柄泄漏 → agent.stop() 统一停机；旧 replay 缓存 local- 脏帧清理
 
+## M6 · Windows 成员接入与二进制分发（新增里程碑，2026-10-14）
+
+背景：用户的 Windows 设备需远程触发、本机执行指定部署命令。决策：Windows 作为第 4 个联邦成员接入，维持 ADR-0005 架构不变（target 定义在 agent 侧 targets.yaml，hub 只读查表）；接入形态定为二进制分发（GitHub Release 下载 → setup 向导 → 注册上线），源码 clone 形态否决（用户决策）。
+
+- [x] F1 target 可视化编辑器（先行合主线，commit 1e1fbff，mac-home 面板同吃编辑能力）：面板内嵌 /editor（表单+YAML 双模式）、targets-store（schema 校验/备份滚动/原子写/从盘重装载）、全链热生效（runtime/tunnel 委派查表/磁贴注册表 replaceTargets）、card.update 上报（hub catalog 即时刷新）。测试 76/76 绿（+11）
+- [x] F2 SEA 单文件二进制（scripts/build-agent.mjs 四步流水线）：esbuild CJS bundle（ws 原生可选依赖 external，运行时回退纯 JS）→ 九张契约 schema 构建期内嵌（build/embedded-schemas.gen.mjs；frames.mjs 改惰性求值解 bundle 顶层求值时序）→ node --experimental-sea-config blob → postject 注入（--sentinel-fuse NODE_SEA_FUSE_*；基底须官方发行版 node 带 fuse，Homebrew 源码构建版不可用；darwin 去签名/注入/ad-hoc 重签）。本机 darwin-x64 109MB 产物冒烟通过
+- [x] F2 setup 首次接入向导（src/lite-agent/setup-wizard.mjs）：agent.json 缺失 → 127.0.0.1:39870 零构建单页；hub 地址归一化（裸域名按 https 假定、尊重已带路径）；WS upgrade 探测（401 即 token 无效提示，刻意不发 agent.hello 零注册痕迹）；保存落盘 agent.json 0600 + 缺失时骨架 targets.yaml（<agentId>-smoke）；onReady 热启动免重启；sameOrigin 防护（Host 回环 + Origin 同源，与 editor 写端点同纪律）；EADDRINUSE 自动回退端口
+- [x] F2 SEA 入口与 dev 容错（src/lite-agent/sea-entry.mjs）：cwd 锚定（exe 旁目录即数据目录：agent.json/agents/<id>/.agent-state）+ 跨平台自动开浏览器（NOVOARD_SETUP_OPEN=0 关）；main.mjs/frames.mjs import.meta 容错（CJS bundle 下为空对象），dev 形态行为零变化
+- [x] F2 GitHub Release 流水线（.github/workflows/release-agent.yml）：tag v* 触发，四平台矩阵 win32-x64 / darwin-arm64 / darwin-x64 / linux-x64，npm test → build → zip → Release 附件
+- [x] 验证：测试 82/82 绿（+6 M6F2）；本机 e2e 全链（裸目录跑二进制 → 向导保存 → 注册 bin-dev → hub 触发 bin-dev-smoke → completed）；公网 hub 错 token 401 场景过
+- [ ] Windows 真机接入（运维动作）：tag 触发 CI 产出 win32-x64 → 下载解压 → 向导填 novoard.firoyang.com + win-dev + token（hub secrets 预置 agentToken）→ /editor 配置真实部署 target
+
 ## 里程碑之外（暂不排期）
 
 - cronkit Windows 机器收编为成员（属"收编"非"试点"，规模另立，见 research 0004）
