@@ -246,6 +246,15 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 - 落 hub 侧与 agent 侧各一份，可对账（§4.4 幂等去重保证两侧不因重放错账）
 - 规则触发、审批门、离线拒绝全部进流水（PRD-5 NFR 审计同车道）
 
+### 6.5 通知扇出与外部事件入口（M3）
+
+- per-target `notify` 策略（§1 同字段）：`always`（默认）/ `on-failure`（仅 failed 终态通知）/ `never`；经 skill `x-novoard-notify` 随 card 透传，hub 终态通知前查表过滤
+- 通知渠道降级链：企微智能机器人（主）→ 企微群 webhook（备）→ Bark（iOS 直达，`barkUrl` + `barkDeviceKey` secrets）；任一成功即止，全失败进日志不阻塞主流程
+- 频控（状态口径，防吞增量）：同 target 同 (kind,state) 60s 窗口内，首条立即发送，后续计数累积；窗口到期 suppressed>0 追发一条合并摘要——增量不丢，仅延后呈现
+- 通知触发点：terminal（终态）/ offline-reject / input-required / member-event（上线离线，M3 新增）
+- 外部事件入口（F4）：`POST /api/webhook/:source`（clientKey Bearer 鉴权）→ 审计落流水（actor `webhook:<source>`）→ 规则引擎消费（事件名 `webhook-<source>`，body 整体作为 vars 透传给动作 target）
+- 规则事件源（F3 首批三源）：`task-terminal` / `member-online` / `member-offline` / `webhook-<source>`
+
 ## 7. artifact 语义
 
 - artifact 属 A2A 车道（task 的产出概念），不是 ops 帧；随 `artifact-update` push notification 上行

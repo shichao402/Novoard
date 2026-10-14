@@ -25,7 +25,17 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       for (const line of raw.split("\n")) {
         try {
           const task = JSON.parse(line);
-          if (task?.id) index.set(task.id, task);
+          if (task?.id) {
+            index.set(task.id, task);
+            // seq 续号：按当日已存最大序号恢复，防止重启后 taskId 撞号（审计对账依赖 id 唯一）
+            const m = String(task.id).match(/^task-(\d{4})(\d{2})(\d{2})-(\d+)$/);
+            if (m) {
+              const day = `${m[1]}-${m[2]}-${m[3]}`;
+              const n = Number(m[4]);
+              const today = new Date(now()).toISOString().slice(0, 10);
+              if (day === today && n > seq) seq = n;
+            }
+          }
         } catch {
           // 损坏行跳过，不阻断启动
         }

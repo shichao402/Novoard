@@ -93,6 +93,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
       clearInterval(pingTimer);
       if (agentId) {
         registry.markOffline(agentId); // 转离线不摘除：离线拒绝通知依赖 card 留表
+        notify?.({ event: { kind: "member-event", target: agentId, state: "offline" } }); // M3：成员事件进通知面与规则源
         log.info?.(`agent ${agentId} 断开，已转离线`);
       }
     });
@@ -145,6 +146,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         detail: { reason: `agent 注册：${body.card?.name ?? body.agentId}` },
       }, validate.auditEvent);
       callbacks.onMemberOnline?.(body.agentId); // M2：离线队列补下发钩子（main 装配层注入）
+      notify?.({ event: { kind: "member-event", target: body.agentId, state: "online" } }); // M3：成员事件进通知面与规则源
       return;
     }
 

@@ -38,6 +38,7 @@ export function startServer({
   validate,
   delegate, // async ({ task, vars, cancel }) => { ok, reason } —— 隧道下发钩子（tunnel.mjs 提供）
   notify,   // async ({ event }) => void —— 通知扇出钩子（通知扇出最小版挂 M1 后段）
+  ingestWebhook, // async ({ source, body }) => void —— 外部事件入口（M3 F4：落流水 + 规则消费）
   log = console,
 }) {
   const safeEq = (a, b) => {
@@ -306,6 +307,25 @@ export function startServer({
         secrets.set({ dashboardToken: token.trim() });
         auditLine({ target: "hub", outcome: "completed", detail: { reason: "dashboard 口令已设置" } }, "human", "ops");
         return sendJson(res, 200, { ok: true });
+      }
+
+      if (req.method === "POST" && pathname.startsWith("/api/webhook/")) {
+        // 通用外部事件入口（PRD-3 F4）：Bearer clientKey 鉴权，事件入流水 → 规则引擎消费
+        const actor = authorizeClient(req);
+        if (!actor) {
+          sendJson(res, 401, { error: "unauthorized" });
+          return;
+        }
+        const source = pathname.slice("/api/webhook/".length).replace(/[^a-zA-Z0-9._-]/g, "") || "default";
+        let body;
+        try {
+          body = await readJson(req);
+        } catch {
+          body = {};
+        }
+        const result = await ingestWebhook?.({ source, body });
+        sendJson(res, 202, { accepted: true, source, actor });
+        return;
       }
 
       if (req.method === "POST" && pathname === "/api/session") {

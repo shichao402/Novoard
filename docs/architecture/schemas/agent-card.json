@@ -42,6 +42,10 @@
             },
             "additionalProperties": false,
             "description": "私有扩展（契约 §2，v1.1）：target offline 策略随 card 透传给 hub 路由"
+          },
+          "x-novoard-notify": {
+            "enum": ["always", "on-failure", "never"],
+            "description": "私有扩展（契约 §2，M3）：target notify 策略透传，hub 终态通知前查表过滤"
           }
         },
         "additionalProperties": false

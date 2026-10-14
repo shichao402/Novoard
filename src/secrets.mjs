@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join, dirname } from "node:path";
 
-const STRING_FIELDS = ["dashboardToken", "wecomWebhook", "wecomBotId", "wecomBotSecret", "wecomChatId"];
+const STRING_FIELDS = ["dashboardToken", "wecomWebhook", "wecomBotId", "wecomBotSecret", "wecomChatId", "barkUrl", "barkDeviceKey"];
 const LIST_FIELDS = ["clientKeys", "agentTokens"];
 const ENV_KEYS = {
   dashboardToken: "NOVOARD_DASHBOARD_TOKEN",
@@ -14,6 +14,8 @@ const ENV_KEYS = {
   wecomBotId: "NOVOARD_WECOM_BOT_ID",
   wecomBotSecret: "NOVOARD_WECOM_BOT_SECRET",
   wecomChatId: "NOVOARD_WECOM_CHAT_ID",
+  barkUrl: "NOVOARD_BARK_URL",
+  barkDeviceKey: "NOVOARD_BARK_DEVICE_KEY",
   clientKeys: "NOVOARD_CLIENT_KEYS",
   agentTokens: "NOVOARD_AGENT_TOKENS",
 };

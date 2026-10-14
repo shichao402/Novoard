@@ -59,33 +59,45 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     }
   }
 
+  // per-target notify 策略查表（F2，契约 §1）：定义在 targets.yaml，经 card skill x-novoard-notify 透传
+  function policyOf(target) {
+    const owned = registry.ownerOf(target);
+    return owned?.skill?.["x-novoard-notify"] ?? "always";
+  }
+
   // 规则引擎接终态事件：动作不旁路（PRD-3 F3），走 submit → delegate 全链路，actor 记 rule-engine
   const notifyAndRules = async ({ event }) => {
-    await notify.emit({ event });
-    if (event.kind === "terminal" && rules.count > 0) {
-      const source = queue.get(event.taskId);
-      const actions = rules.evaluate({
-        event: "task-terminal",
-        target: event.target,
-        state: event.state,
-        taskId: event.taskId,
-        ruleTrace: source?.ruleTrace ?? [],
-      });
-      for (const action of actions) {
-        const owner = action.member
-          ? registry.status().find((s) => s.agentId === action.member) && registry.resolve(action.target)?.agentId === action.member
-            ? registry.resolve(action.target)
-            : null
-          : registry.resolve(action.target);
-        if (!owner) {
-          audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, outcome: "rejected", detail: { reason: registry.knows(action.target) ? "member-offline" : "no-such-skill" } }, validate.auditEvent);
-          continue;
-        }
-        const task = queue.submit({ skillId: action.target, target: action.target, member: owner.agentId, vars: {}, actor: "rule-engine", lane: "a2a", ruleTrace: action.ruleTrace });
-        audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, taskId: task.id, outcome: "submitted", detail: { reason: `规则触发：${event.target} ${event.state}` } }, validate.auditEvent);
-        delegate({ task, vars: {} }).catch((error) => log.error?.(`规则任务下发失败 ${task.id}：${error.message}`));
+    await notify.emit({ event, policy: event.kind === "terminal" ? policyOf(event.target) : "always" });
+    if (rules.count === 0) return;
+    // 事件源统一进规则引擎（F3 首批三源）：task 终态 / member 上线离线 / webhook 外部事件
+    let ruleEvent = null;
+    if (event.kind === "terminal") ruleEvent = { event: "task-terminal", target: event.target, state: event.state, taskId: event.taskId };
+    else if (event.kind === "member-event") ruleEvent = { event: `member-${event.state}`, target: event.target, state: event.state };
+    else if (event.kind === "webhook") ruleEvent = { event: `webhook-${event.source}`, target: "", state: event.body?.action ?? "", vars: event.body ?? {} };
+    if (!ruleEvent) return;
+
+    const ruleTrace = ruleEvent.taskId ? queue.get(ruleEvent.taskId)?.ruleTrace ?? [] : [];
+    const actions = rules.evaluate(ruleEvent);
+    for (const action of actions) {
+      const owner = action.member
+        ? registry.status().find((s) => s.agentId === action.member) && registry.resolve(action.target)?.agentId === action.member
+          ? registry.resolve(action.target)
+          : null
+        : registry.resolve(action.target);
+      if (!owner) {
+        audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, outcome: "rejected", detail: { reason: registry.knows(action.target) ? "member-offline" : "no-such-skill" } }, validate.auditEvent);
+        continue;
       }
+      const task = queue.submit({ skillId: action.target, target: action.target, member: owner.agentId, vars: action.vars ?? {}, actor: "rule-engine", lane: "a2a", ruleTrace: action.ruleTrace });
+      audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, taskId: task.id, outcome: "submitted", detail: { reason: `规则触发：${ruleEvent.event}${ruleEvent.state ? " " + ruleEvent.state : ""}${ruleEvent.taskId ? " ← " + ruleEvent.taskId : ""}` } }, validate.auditEvent);
+      delegate({ task, vars: action.vars ?? {} }).catch((error) => log.error?.(`规则任务下发失败 ${task.id}：${error.message}`));
     }
+  };
+
+  /** 外部事件入口（F4）：webhook 落流水 + 规则消费 + 通知面（member-event 类同理给面板）。 */
+  const ingestWebhook = async ({ source, body }) => {
+    audit.append({ actor: `webhook:${source}`, lane: "a2a", target: "-", outcome: "accepted", detail: { reason: `外部事件：${source}`, body: body ?? {} } }, validate.auditEvent);
+    await notifyAndRules({ event: { kind: "webhook", source, body } });
   };
 
   const serverPromise = startServer({
@@ -99,6 +111,7 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     validate,
     delegate,
     notify: notifyAndRules,
+    ingestWebhook,
     log,
   });
 
@@ -138,8 +151,11 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     artifacts,
     validate,
     notify: notifyAndRules,
+    notifyImpl: notify,
     rules,
     wecomBot,
+    ingestWebhook,
+    policyOf,
   };
 }
 

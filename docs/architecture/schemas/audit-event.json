@@ -15,7 +15,7 @@
     "target": { "type": "string", "minLength": 1 },
     "taskId": { "type": "string", "pattern": "^task-" },
     "outcome": {
-      "enum": ["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected"]
+      "enum": ["submitted", "working", "input-required", "completed", "failed", "canceled", "rejected", "accepted"]
     },
     "audit": { "enum": ["none", "summary", "full"] },
     "member": { "type": "string" },
