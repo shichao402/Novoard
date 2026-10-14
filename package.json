@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node src/main.mjs",
     "dev": "node --watch src/main.mjs",
-    "test": "node --test \"test/*.mjs\""
+    "contract-gate": "node scripts/check-contract-copy.mjs",
+    "test": "npm run contract-gate && node --test \"test/*.mjs\""
   },
   "dependencies": {
     "@wecom/aibot-node-sdk": "^1.0.7",

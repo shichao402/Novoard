@@ -35,6 +35,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Contract copy gate
+        run: node scripts/check-contract-copy.mjs
       - name: Build SEA binary
         run: node scripts/build-agent.mjs
       - name: Package zip (unix)
