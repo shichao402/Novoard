@@ -80,7 +80,17 @@
 - [x] F2 SEA 入口与 dev 容错（src/lite-agent/sea-entry.mjs）：cwd 锚定（exe 旁目录即数据目录：agent.json/agents/<id>/.agent-state）+ 跨平台自动开浏览器（NOVOARD_SETUP_OPEN=0 关）；main.mjs/frames.mjs import.meta 容错（CJS bundle 下为空对象），dev 形态行为零变化
 - [x] F2 GitHub Release 流水线（.github/workflows/release-agent.yml）：tag v* 触发，四平台矩阵 win32-x64 / darwin-arm64 / darwin-x64 / linux-x64，npm test → build → zip → Release 附件
 - [x] 验证：测试 82/82 绿（+6 M6F2）；本机 e2e 全链（裸目录跑二进制 → 向导保存 → 注册 bin-dev → hub 触发 bin-dev-smoke → completed）；公网 hub 错 token 401 场景过
-- [ ] Windows 真机接入（运维动作）：tag 触发 CI 产出 win32-x64 → 下载解压 → 向导填 novoard.firoyang.com + win-dev + token（hub secrets 预置 agentToken）→ /editor 配置真实部署 target
+- [x] Windows 真机接入（运维动作）：tag 触发 CI 产出 win32-x64 → 下载解压 → 向导填 novoard.firoyang.com + win-dev + token（hub secrets 预置 agentToken）→ /editor 配置真实部署 target。2026-10-14 验收通过：win-dev 真机接入成功，hub 触发 win-dev-smoke → completed 全链绿；hub M6 Release v0.2.0 四平台产物已挂（win32-x64 32MB）
+
+## M7 · 拆仓与全员二进制终态（2026-10-14）
+
+背景：用户决策——agent（面板/runner/编辑器/向导）从 hub 仓独立为跨平台项目 novoard-agent，"一份源码四平台产物"，win-dev/mac-home 是身份不是程序；契约 SSOT 留 hub 仓，agent 仓持锁定拷贝（relkit 模式）防漂移。执行序列：修 editor bug（不带 bug 搬家）→ 契约锁定拷贝 → 建仓搬运 → mac-home 切二进制 → 收尾。
+
+- [x] 前置：editor 引号转义致命 bug 修复（模板字符串内 `\'` 致页面无响应）+ 三内嵌页面（editor/磁贴/向导）vm.Script 语法回归测试；hub v0.2.1 发布（commit 5010bff，测试 85/85）
+- [x] F1 契约锁定拷贝：hub 仓 `src/lite-agent/contract/`（frames + 九 schema 内建）+ 双仓门禁 scripts/check-contract-copy.mjs（CI 红线：SSOT 漂移即红；结构化等价比较：export 函数段 + schema 常量表）+ release 流水线挂门禁 + npm test 前置（commit 75d3aed）
+- [x] F2 独立仓 novoard-agent：git subtree split 保留 src/ 全历史（10 commits）→ src/ 布局 + package.json + 契约自检门禁（CONTRACT_VERSION v1.1 + 九 schema 行为样例）+ 契约级 mock-hub（Bearer 鉴权 / hello.ack / a2a message-send 委派 / 终态上行 / card.update）+ 测试 fixture 化（fleet 定义留 hub 仓）+ README；远端 github.com/shichao402/novoard-agent，30/30 绿（commit 4c6bfb0）
+- [x] F3 mac-home 切二进制：agent 仓 SCHEMA_DIR 修复（commit 681c01b，指向 src/contract/schemas）+ tag v0.1.1 触发四平台 CI；官方 node v22.23.3 darwin-x64 作 SEA 基底本机打包（110.7MB）；launchd plist 切二进制入口 + 定义目录迁移（agents/mac-home/ 含 targets.yaml+templates 迁入数据目录，agent.json/state 不动）；线上验证全绿：hub 聚合 card 含 mac-home 全部四 target（在线注册）、面板/编辑器 200、v0.2.1 修复生效、磁贴触发 smoke-test → completed（本地闭环）+ 重放队列 0 积压
+- [ ] F4 收尾（进行中）：hub 仓 roadmap 记账（本条）、双 Release 产物验证、win-dev 升级 v0.2.1 指引、hub 仓 lite-agent 去留决策（hub e2e 仍引用 src/lite-agent，与用户确认时机）
 
 ## 里程碑之外（暂不排期）
 
