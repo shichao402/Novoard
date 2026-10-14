@@ -37,11 +37,17 @@ jobs:
       - run: npm test
       - name: Build SEA binary
         run: node scripts/build-agent.mjs
-      - name: Package zip
+      - name: Package zip (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           cd build/dist/${{ matrix.platform }}-${{ matrix.arch }}
           zip -r "../../../novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" .
+      - name: Package zip (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "build/dist/${{ matrix.platform }}-${{ matrix.arch }}/*" -DestinationPath "novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
       - name: Upload artifact (workflow debug)
         uses: actions/upload-artifact@v4
         with:
