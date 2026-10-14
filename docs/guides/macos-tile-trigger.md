@@ -25,9 +25,34 @@ bash /Users/firoyang/workspace/Novoard/bin/novoard-tile.sh
 
 环境变量可覆盖默认值：`NOVOARD_HUB_URL` / `NOVOARD_TARGET` / `NOVOARD_MEMBER`。
 
-### 形态 3：Shortcuts App 磁贴（需手动建一次）
+### 形态 3：Shortcuts App 磁贴 / 全局热键（需手动建一次，ADR-0008 兜底方案）
 
-在 Shortcuts App 中新建快捷指令：URL `https://novoard.firoyang.com/api/trigger`，方法 POST，请求体 `{"target":"dev-build-investm"}`，可加「显示通知」动作。可固定到菜单栏/程序坞。需 iCloud 同步启用才能 CLI 管理，属可选进阶。
+在 Shortcuts App 中新建快捷指令，动作链建议两步（走本机 localhost A2A 端点，hub 离线也可用）：
+
+1. 「获取 URL 内容」：URL `http://127.0.0.1:39871/a2a`，方法 POST，请求体（JSON）：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "message/send",
+  "params": {
+    "message": {
+      "messageId": "sc-$(date +%s)",
+      "role": "user",
+      "parts": [{ "kind": "text", "text": "dev-build-investm" }]
+    }
+  }
+}
+```
+
+Shortcuts 里 `messageId` 填固定字符串即可（如 `sc-hotkey`）；`text` 部件即裸 skillId（可带 `@mac-home` 指定成员）。
+
+2. 可选「显示通知」，展示响应内容（taskId / 状态）。
+
+随后在快捷指令详情页「添加键盘快捷键」（如 ⌥⌘B）即得全局热键；也可固定到菜单栏 / 程序坞当磁贴点。
+
+> 与旧方案差异：原形态 3 打 hub 公网 `POST /api/trigger`（fire-and-forget，需 hub 在线）；热键兜底按 ADR-0008 改打本机 `127.0.0.1:39871` A2A 端点，本地闭环（M5 已交付），且支持审批类 target 的 tasks/get / approve 查询。构建类 target（dev-build-investm）因 InvestM 仓库脏，failed 为真实预期状态。仍需 iCloud 同步启用才能 CLI 管理，故为用户侧一次性手动操作。
 
 ## 响应语义（fire-and-forget）
 
