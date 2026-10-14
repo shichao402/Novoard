@@ -18,7 +18,24 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
   /** msgId → true（信封幂等去重窗口，契约 §4.4 第 3 条；窗口随重启清零，重放由 agent 侧负责） */
   const dedupWindow = new Map();
 
-  // ---- 启动重放：扫文件恢复任务（重启不丢的机制本体） ----
+  /** 状态变更订阅（M4 message/stream SSE 数据源）：taskId → Set<fn>，"*" 通配全部任务。 */
+  const listeners = new Map(); // taskId | "*" → Set<(task) => void>
+  function subscribe(taskId, fn) {
+    const key = taskId || "*";
+    if (!listeners.has(key)) listeners.set(key, new Set());
+    listeners.get(key).add(fn);
+    return () => listeners.get(key)?.delete(fn);
+  }
+  function emit(task) {
+    for (const fn of listeners.get(task.id) ?? []) {
+      try { fn(snapshot(task)); } catch {}
+    }
+    for (const fn of listeners.get("*") ?? []) {
+      try { fn(snapshot(task)); } catch {}
+    }
+  }
+
+
   if (existsSync(file)) {
     const raw = readFileSync(file, "utf8").trim();
     if (raw) {
@@ -54,6 +71,9 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
   }
 
   return {
+    /** 状态变更订阅（M4 SSE 数据源）。 */
+    subscribe,
+
     /** 触发入队：生成 task id、建 task 对象、落盘、入索引。 */
     submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "" }) {
       const id = `task-${new Date(now()).toISOString().slice(0, 10).replace(/-/g, "")}-${String(++seq).padStart(3, "0")}`;
@@ -85,11 +105,12 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       return task;
     },
 
-    /** 状态翻转（working/input-required/终态），终态只允许一次（幂等）。 */
+    /** 状态翻转（working/input-required/终态），终态只允许一次（幂等）；working→working 幂等（步骤进度 message 更新）。 */
     transition(taskId, state, extra = {}) {
       const task = index.get(taskId);
       if (!task) return null;
       if (TERMINAL_STATES.has(task.state)) return task;
+      if (task.state === state && state !== "working") return task; // 同态重复转（working 除外）：幂等跳
       const ts = new Date(now()).toISOString();
       task.state = state;
       task.updatedAt = ts;
@@ -99,6 +120,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         task.queuedOfflineAt = "";
       }
       persist(snapshot(task));
+      emit(task);
       return task;
     },
 

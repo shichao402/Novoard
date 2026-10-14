@@ -37,6 +37,8 @@ export function startServer({
   artifacts,
   validate,
   delegate, // async ({ task, vars, cancel }) => { ok, reason } —— 隧道下发钩子（tunnel.mjs 提供）
+  resumeTask, // ({ task, actor }) => boolean —— 审批门恢复钩子（M4 F3：input-required → 继续执行）
+  acl,     // 授权矩阵（M4 F4）：{ check({ actor, skillId, member }) → { allowed, reason } }
   notify,   // async ({ event }) => void —— 通知扇出钩子（通知扇出最小版挂 M1 后段）
   ingestWebhook, // async ({ source, body }) => void —— 外部事件入口（M3 F4：落流水 + 规则消费）
   log = console,
@@ -191,6 +193,14 @@ export function startServer({
       }
       const [skillId, memberHint] = target;
       const owner = memberHint ? resolveWithMember(skillId, memberHint) : registry.resolve(skillId);
+      // 授权矩阵（M4 F4，AC4）：客户端 → 成员/skill 白名单，拒绝留审计
+      const member = owner?.agentId ?? memberHint ?? "";
+      const gate = acl?.check?.({ actor, skillId, member });
+      if (gate && !gate.allowed) {
+        auditLine({ target: skillId, outcome: "rejected", detail: { reason: `acl-denied：${gate.reason}` } }, actor, "a2a");
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, `授权矩阵拒绝：${gate.reason}`);
+        return;
+      }
       if (!owner) {
         if (registry.knows(skillId)) {
           // 成员离线：按 target offline 策略分流（契约 §5.1，M2）——queue 则入队返回 task，reject 则报错
@@ -224,7 +234,79 @@ export function startServer({
     }
 
     if (rpc.method === "message/stream") {
-      rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "message/stream M4 完备化，试点期以轮询 + 通知顶替");
+      // M4 F2：SSE 步骤级进度——订阅 task 状态变更，帧形状对齐 A2A spec（result: TaskStatusUpdateEvent / TaskArtifactUpdateEvent）
+      const id = String(rpc.params?.id ?? rpc.params?.taskId ?? "");
+      const task = queue.get(id);
+      if (!task) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      const sse = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      const heartbeat = setInterval(() => res.write(": ping\n\n"), 15_000);
+      heartbeat.unref?.();
+      const off = queue.subscribe(id, (t) => {
+        if (t.state === "queued-offline" || t.state === "working" || t.state === "input-required") {
+          sse({ jsonrpc: "2.0", id: rpc.id, result: { kind: "status-update", taskId: t.id, status: t.status, final: false } });
+        }
+        if (queue.isTerminal(t.state)) {
+          sse({ jsonrpc: "2.0", id: rpc.id, result: { kind: "status-update", taskId: t.id, status: t.status, final: true } });
+          if (t.artifacts?.length) {
+            for (const a of t.artifacts) sse({ jsonrpc: "2.0", id: rpc.id, result: { kind: "artifact-update", taskId: t.id, artifact: a } });
+          }
+          cleanup();
+        }
+      });
+      function cleanup() {
+        clearInterval(heartbeat);
+        off();
+        res.end();
+      }
+      req.on("close", cleanup);
+      // 订阅前状态已变化（如已终态）：补发当前快照
+      const cur = queue.get(id);
+      if (cur && queue.isTerminal(cur.state)) {
+        sse({ jsonrpc: "2.0", id: rpc.id, result: { kind: "status-update", taskId: cur.id, status: cur.status, final: true } });
+        cleanup();
+      } else if (cur) {
+        sse({ jsonrpc: "2.0", id: rpc.id, result: { kind: "status-update", taskId: cur.id, status: cur.status, final: false } });
+      }
+      return;
+    }
+
+    if (rpc.method === "tasks/approve") {
+      // M4 F3：审批门恢复端点（IM AI / 面板 / 磁贴三入口共用同一份状态）
+      const id = String(rpc.params?.id ?? "");
+      const decision = rpc.params?.decision === "reject" ? "reject" : "approve";
+      const raw = queue.get(id);
+      if (!raw) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
+        return;
+      }
+      if (raw.state !== "input-required") {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, `task 状态为 ${raw.state}，非 input-required，无需恢复`);
+        return;
+      }
+      if (decision === "reject") {
+        queue.transition(id, "canceled", { message: `审批拒绝：${actor}` });
+        auditLine({ target: raw.target, taskId: id, outcome: "canceled", detail: { reason: `approval-rejected by ${actor}` } }, actor, "a2a");
+        notify?.({ event: { kind: "terminal", taskId: id, target: raw.target, state: "canceled", reason: "approval-rejected" } });
+        rpcResult(res, rpc.id, queue.toA2A(id));
+        return;
+      }
+      // approve：下发恢复帧（agent 侧 input-required → working，继续执行）
+      const resumed = resumeTask?.({ task: raw, actor });
+      if (!resumed) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "恢复失败：member-offline 或 hub 无恢复通道");
+        return;
+      }
+      auditLine({ target: raw.target, taskId: id, outcome: "working", detail: { reason: `approval-resumed by ${actor}` } }, actor, "a2a");
+      rpcResult(res, rpc.id, queue.toA2A(id));
       return;
     }
 

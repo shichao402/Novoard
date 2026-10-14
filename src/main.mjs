@@ -15,10 +15,11 @@ import { createArtifacts } from "./artifacts.mjs";
 import { createNotify } from "./notify.mjs";
 import { createWecomBot } from "./wecom-bot.mjs";
 import { createRules } from "./rules.mjs";
+import { createAcl } from "./acl.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
 
-export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, offlineSweepMs = 30_000, log = console } = {}) {
+export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, aclPath, offlineSweepMs = 30_000, log = console } = {}) {
   mkdirSync(stateDir, { recursive: true });
   const auditDir = join(stateDir, "audit");
   const queueDir = join(stateDir, "queue");
@@ -33,6 +34,7 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   const wecomBot = createWecomBot({ secrets, log });
   const notify = createNotify({ secrets, bot: wecomBot, log });
   const rules = createRules({ rulesPath, log });
+  const acl = createAcl({ aclPath: aclPath ?? join(stateDir, "acl.yaml"), log });
 
   let tunnelDelegate = async () => ({ ok: false, reason: "tunnel not ready" });
   const delegate = (args) => tunnelDelegate(args);
@@ -94,6 +96,33 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     }
   };
 
+  // 审批门恢复钩子（M4 F3）：input-required → 下发 resume 帧 → hub 侧转 working
+  function resumeTask({ task }) {
+    const result = delegate({ task, vars: task.vars, resume: true });
+    if (result && typeof result.then === "function") {
+      return result.then((r) => {
+        if (r?.ok) queue.transition(task.id, "working", { message: "approval-resumed" });
+        return r?.ok ?? false;
+      });
+    }
+    if (result?.ok) queue.transition(task.id, "working", { message: "approval-resumed" });
+    return result?.ok ?? false;
+  }
+
+  // 审批门 TTL（M4 F3）：input-required 超时（默认 10 分钟）自动 rejected + 通知
+  const APPROVAL_TTL_MS = 10 * 60_000;
+  function sweepApprovalGate() {
+    for (const task of queue.list({ state: "input-required" })) {
+      const age = Date.now() - Date.parse(task.updatedAt);
+      if (age > APPROVAL_TTL_MS) {
+        queue.transition(task.id, "canceled", { message: "approval-ttl-expired" });
+        audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "canceled", detail: { reason: "approval-ttl-expired" } }, validate.auditEvent);
+        notify.emit({ event: { kind: "terminal", taskId: task.id, target: task.target, state: "canceled", reason: "approval-ttl-expired" } }).catch(() => {});
+        log.info?.(`[approval-gate] ${task.id} 审批超时转 canceled（approval-ttl-expired）`);
+      }
+    }
+  }
+
   /** 外部事件入口（F4）：webhook 落流水 + 规则消费 + 通知面（member-event 类同理给面板）。 */
   const ingestWebhook = async ({ source, body }) => {
     audit.append({ actor: `webhook:${source}`, lane: "a2a", target: "-", outcome: "accepted", detail: { reason: `外部事件：${source}`, body: body ?? {} } }, validate.auditEvent);
@@ -110,6 +139,8 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     artifacts,
     validate,
     delegate,
+    resumeTask,
+    acl,
     notify: notifyAndRules,
     ingestWebhook,
     log,
@@ -123,8 +154,11 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   tunnel.onMemberOnline = (agentId) => {
     flushOfflineTasks(agentId).catch((error) => log.error?.(`[offline-queue] 补下发异常：${error.message}`));
   };
-  // sweeper 定时器（hub 句柄关闭时清理）
-  const sweepTimer = setInterval(sweepOfflineQueue, offlineSweepMs);
+  // sweeper 定时器（hub 句柄关闭时清理）：离线队列 TTL + 审批门 TTL
+  const sweepTimer = setInterval(() => {
+    sweepOfflineQueue();
+    sweepApprovalGate();
+  }, offlineSweepMs);
   sweepTimer.unref?.();
 
   // 启动时扫尾：重启前留下的 queued-offline 任务，owner 在线则立即补下发，到期则转 failed
@@ -156,6 +190,8 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     wecomBot,
     ingestWebhook,
     policyOf,
+    resumeTask,
+    acl,
   };
 }
 

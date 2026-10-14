@@ -215,7 +215,12 @@ fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 �
 ### 5.2 AI 客户端门 —— A2A 字面端点
 
 - `GET /.well-known/agent-card.json` → 聚合 Agent Card（§2）
-- `POST /a2a` → JSON-RPC 2.0：`message/send`、`tasks/get`、`tasks/cancel`（试点期；`message/stream` M4）
+- `POST /a2a` → JSON-RPC 2.0：`message/send`、`message/stream`（SSE，M4）、`tasks/get`、`tasks/cancel`、`tasks/approve`（审批门恢复，M4）
+- `message/stream`：SSE 步骤级进度——订阅 task 状态变更；帧形状 `result: { kind: "status-update"|"artifact-update", taskId, status, final }`；agent 步骤进度以非终态 working 帧（status.message = "step i/n"）透传；15s 心跳注释行保活；连接前已终态则补发快照即关
+- `message/resume`（hub → agent 下行，M4 审批门）：params `{ id, decision: "approve" }`；agent 侧 input-required 挂起 → 恢复执行；拒绝走 `tasks/cancel`
+- `tasks/approve`（A2A 客户端 → hub，M4）：params `{ id, decision: "approve"|"reject" }`；仅 input-required 状态可恢复；三入口（IM AI / 面板 / 磁贴）共用此端点，状态只有一份
+- 审批门 TTL：input-required 挂起超 10 分钟自动 canceled（`approval-ttl-expired`）+ 通知
+- 授权矩阵（M4 F4）：`.state/acl.yaml` 白名单（定义时维护，运行时查表）；client 条目 `allow/deny: [member/skill, member, member/*]`，deny 优先；未配置默认放行（单用户试点）；dashboard/human 不受限；拒绝留审计（`acl-denied`）
 
 ```json
 { "jsonrpc": "2.0", "id": "req-2", "method": "tasks/get", "params": { "id": "task-20261012-001" } }
@@ -254,6 +259,13 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 - 通知触发点：terminal（终态）/ offline-reject / input-required / member-event（上线离线，M3 新增）
 - 外部事件入口（F4）：`POST /api/webhook/:source`（clientKey Bearer 鉴权）→ 审计落流水（actor `webhook:<source>`）→ 规则引擎消费（事件名 `webhook-<source>`，body 整体作为 vars 透传给动作 target）
 - 规则事件源（F3 首批三源）：`task-terminal` / `member-online` / `member-offline` / `webhook-<source>`
+
+### 6.6 审批门全链路（M4）
+
+- target `requiresApproval: true` → agent 侧挂起（非终态 input-required，与试点期"回执即终态"语义不兼容变更），hub task 停在 input-required
+- 恢复三入口共用 `tasks/approve`（状态只有一份）：IM AI 回填 / Web 面板确认 / 本地磁贴确认（磁贴随 M5 载体）
+- 恢复链：`tasks/approve` → hub 下行 `message/resume` → agent `startExecution` → 上行 working/终态；拒绝走 `tasks/cancel`（挂起任务 agent 侧直接出队）
+- TTL：超 10 分钟自动 canceled（`approval-ttl-expired`），sweeper 与离线队列同频扫描
 
 ## 7. artifact 语义
 

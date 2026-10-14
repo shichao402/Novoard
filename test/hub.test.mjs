@@ -260,14 +260,14 @@ test("A2A 门：三方法与错误码字面", async () => {
     assert.equal(body.error.code, -32004);
     assert.match(body.error.message, /no remote capability|expose=local/);
 
-    // message/stream → 明确不支持
+    // message/stream（M4 已实现）：无 id → TASK_NOT_FOUND（-32001），不再是不支持
     res = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
       headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: "req-7", method: "message/stream", params: {} }),
     });
     body = await res.json();
-    assert.equal(body.error.code, -32004);
+    assert.equal(body.error.code, -32001);
 
     // 聚合 card 公开可读
     res = await fetch(`http://127.0.0.1:${port}/.well-known/agent-card.json`);

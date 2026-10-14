@@ -194,6 +194,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
       const state = message?.status?.state;
       const task = queue.get(taskId);
       if (state && task) {
+        // working 帧（步骤进度）幂等转：state 不变仅 message 更新；input-required/终态正常转
         queue.transition(taskId, state, { message: message?.status?.message });
         audit.append({
           actor: `agent:${task.member}`,
@@ -229,7 +230,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
   }
 
   /** 下发钩子（server.mjs delegate）：message/send 委派 或 tasks/cancel，走隧道 a2a 帧。 */
-  async function delegate({ task, vars = {}, cancel = false }) {
+  async function delegate({ task, vars = {}, cancel = false, resume = false }) {
     const member = registry.resolve(task.skillId);
     if (!member?.conn) {
       log.error?.(`下发失败：${task.skillId} 成员离线`);
@@ -243,6 +244,18 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         taskId: task.id,
         ts: new Date().toISOString(),
         body: { jsonrpc: "2.0", method: "tasks/cancel", params: { id: task.id } },
+      });
+      return { ok: true };
+    }
+    if (resume) {
+      // M4 F3 审批门恢复：agent 侧 input-required → working，继续执行
+      sendEnvelope(member.conn, {
+        v: 1,
+        kind: "a2a",
+        msgId: newMsgId(),
+        taskId: task.id,
+        ts: new Date().toISOString(),
+        body: { jsonrpc: "2.0", method: "message/resume", params: { id: task.id, decision: "approve" } },
       });
       return { ok: true };
     }
