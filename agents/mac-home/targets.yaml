@@ -25,3 +25,13 @@ targets:
     audit: summary
     requiresApproval: false
     notify: on-failure       # M3 AC2 验收：成功执行不通知，失败才通知
+
+  open-investm:
+    title: 打开 InvestM 实例（不构建）
+    template: open-instance
+    vars:
+      url: http://localhost:5173
+    expose: a2a
+    audit: summary
+    requiresApproval: false
+    notify: on-failure

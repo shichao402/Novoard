@@ -193,6 +193,14 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
     if (kind === "status-update") {
       const state = message?.status?.state;
       const task = queue.get(taskId);
+      if (!task && taskId.startsWith("task-local-")) {
+        // 本地磁贴触发的终态镜像（ADR-0008）：hub 不建 task，但 ack + 落审计（本地闭环的可见性镜像）
+        if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId });
+        if (state) {
+          audit.append({ actor: `agent:${boundAgentId.get(ws) ?? "?"}`, lane: "a2a", target: "-", taskId, outcome: state, detail: { via: "tile-local-mirror" } }, validate.auditEvent);
+        }
+        return;
+      }
       if (state && task) {
         // working 帧（步骤进度）幂等转：state 不变仅 message 更新；input-required/终态正常转
         queue.transition(taskId, state, { message: message?.status?.message });

@@ -1,6 +1,6 @@
 # ADR-0007: cronkit 退位为参考实现
 
-- 状态：Proposed
+- 状态：Accepted（载体决策已由 [ADR-0008](0008-desktop-shell-decision.md) 接续完成）
 - 日期：2026-10-12
 - 讨论来源：2026-10-12 cronkit 依赖复核。前轮判断"PRD-1 落地载体与 contracts steps 语法实质绑定 cronkit、不可删除"，用户推翻："不用，只是可以参考而已"。同轮提出三个试点接入（企微 bot、两台 Mac 的 dev builder、内网周报 agent），验证路径均不经过 cronkit。
 

@@ -104,7 +104,7 @@ test("e2e：hello 注册 → trigger → 委派执行 → 终态上行 → 两�
     assert.ok(agentAudit.some((e) => e.taskId === taskId && e.outcome === "completed"));
     assert.ok(agentAudit.some((e) => e.taskId === taskId && e.outcome === "working"));
   } finally {
-    agent?.tunnel.close(); // 必须先关 agent 隧道，否则 hub.server.close() 死等 WS
+    await agent?.stop(); // 统一停机：关隧道 + localhost 端点，否则 hub.server.close() 死等 WS / 进程不退
     await close();
     rmSync(hubDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
@@ -132,7 +132,7 @@ test("e2e：failed target 上行 failed 终态", async () => {
     await waitFor(() => ["failed", "completed"].includes(hub.queue.get(taskId)?.state), 5000);
     assert.equal(hub.queue.get(taskId).state, "failed");
   } finally {
-    agent?.tunnel.close();
+    await agent?.stop();
     await close();
     rmSync(hubDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });
@@ -156,7 +156,7 @@ test("e2e：断线重连——close 后 start 重新注册", async () => {
     await agent.tunnel.start();
     await waitFor(() => hub.registry.resolve("echo-hello") !== null, 3000); // 重新注册
   } finally {
-    agent?.tunnel.close();
+    await agent?.stop();
     await close();
     rmSync(hubDir, { recursive: true, force: true });
     rmSync(agentDir, { recursive: true, force: true });

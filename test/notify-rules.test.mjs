@@ -142,7 +142,7 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
     // 规则触发进审计（PRD-5 NFR 审计同车道）
     assert.ok(hub.audit.list().some((e) => e.actor === "rule-engine" && e.target === "smoke-test" && e.outcome === "submitted"));
   } finally {
-    agent?.tunnel.close();
+    await agent?.stop();
     await new Promise((r) => hub.server.close(r));
     rmSync(hubDir, { recursive: true, force: true });
     rmSync(stubDir, { recursive: true, force: true });
