@@ -28,10 +28,19 @@ export function renderDashboard() {
   .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #21262d; }
   .badge.submitted { color: #d29922; }
   .badge.working { color: #58a6ff; }
+  .badge.input-required { color: #d29922; }
   .badge.queued-offline { color: #d29922; }
   .badge.completed { color: #3fb950; }
   .badge.failed, .badge.rejected, .badge.canceled { color: #f85149; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+  .tilebtn { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 12px; cursor: pointer; text-align: left; transition: all .15s; }
+  .tilebtn:hover { border-color: #238636; transform: translateY(-1px); }
+  .tilebtn .t { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .tilebtn .m { color: #8b949e; font-size: 11px; }
+  .tilebtn .st { font-size: 11px; margin-top: 4px; }
+  .appr { background: #1f6feb; padding: 2px 10px; font-size: 12px; }
+  .appr.rej { background: #da3633; }
   input, select { background: #0d1117; border: 1px solid #30363d; color: #e6edf3; border-radius: 6px; padding: 6px 10px; font-size: 13px; }
   button { background: #238636; border: none; color: #fff; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
   button.sec { background: #21262d; }
@@ -67,6 +76,11 @@ export function renderDashboard() {
 </section>
 
 <div id="main" hidden>
+  <section>
+    <h2>磁贴（快捷操作）</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
   <section>
     <h2>触发</h2>
     <div class="row">
@@ -142,7 +156,19 @@ async function refresh() {
       return \`<div class="grp"><h3>\${esc(m.name)} <span class="\${m.online ? "on" : "off"}">· \${m.online ? "online" : "offline"}</span><span class="sub2">\${esc(m.agentId)}</span></h3>\${skills}</div>\`;
     }).join("") || '<div class="meta">暂无成员注册</div>';
 
-    // datalist + member 下拉
+    // 磁贴分区：expose a2a 的 skills → 大按钮；input-required 任务 → 批准/拒绝按钮
+    $("tiles").innerHTML = (catalog.catalog || []).flatMap((m) => (m.skills || []).map((s) => ({ ...s, member: m.agentId, memberName: m.name, online: m.online })))
+      .map((s) => {
+        const last = lastRunOf(s.id, tasks.tasks || []);
+        const st = last ? \`<div class="st badge \${esc(last.state)}">\${esc(last.state)} · \${esc(new Date(last.updatedAt).toLocaleTimeString())}</div>\` : '<div class="st meta">未运行</div>';
+        return \`<button class="tilebtn" \${s.online ? "" : 'disabled title="成员离线"'} onclick="fillTarget('\${esc(s.id)}', '\${esc(s.member)}'); fireTile()"><div class="t">\${esc(s.name ?? s.id)}</div><div class="m">\${esc(s.id)} @\${esc(s.memberName)}</div>\${st}</button>\`;
+      }).join("") || '<div class="meta">暂无可触发能力</div>';
+    const pending = (tasks.tasks || []).filter((t) => t.state === "input-required");
+    if (pending.length) {
+      $("tiles").innerHTML += \`<div style="grid-column: 1 / -1; margin-top:6px">\${pending.map((t) =>
+        \`<div class="row" style="margin:4px 0"><span class="badge input-required">待审批</span><span>\${esc(t.target)}</span><span class="meta">\${esc(t.id)}</span><button class="appr" onclick="approveTask('\${esc(t.id)}', 'approve')">批准</button><button class="appr rej" onclick="approveTask('\${esc(t.id)}', 'reject')">拒绝</button></div>\`
+      ).join("")}</div>\`;
+    }
     const allSkills = (catalog.catalog || []).flatMap((m) => (m.skills || []).map((s) => s.id));
     $("target-ids").innerHTML = allSkills.map((id) => \`<option value="\${esc(id)}">\`).join("");
     const memberSel = $("member");
@@ -183,6 +209,23 @@ window.fillTarget = (id, member) => {
   $("member").value = member;
   $("fire").focus();
 };
+
+window.fireTile = async () => { $("fire").click(); };
+
+window.approveTask = async (id, decision) => {
+  try {
+    const res = await api("/a2a", { method: "POST", body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tasks/approve", params: { id, decision } }) });
+    const body = await res.json();
+    msg(body.result ? \`\${decision === "approve" ? "已批准" : "已拒绝"}：\${id} → \${body.result.status?.state ?? ""}\` : (body.error?.message ?? "审批失败"));
+    refresh();
+  } catch (error) { msg(error.message); }
+};
+
+function lastRunOf(skillId, tasks) {
+  let last = null;
+  for (const t of tasks) if (t.target === skillId && (!last || t.updatedAt > last.updatedAt)) last = t;
+  return last;
+}
 
 $("login").onclick = async () => {
   const token = $("token").value.trim();

@@ -35,3 +35,13 @@ targets:
     audit: summary
     requiresApproval: false
     notify: on-failure
+
+  approval-demo:
+    title: 审批门演示（AC2 验收）
+    steps:
+      - script: echo "approval-gate-passed"
+    vars: {}
+    expose: a2a
+    audit: summary
+    requiresApproval: true
+    notify: on-failure

@@ -47,6 +47,7 @@ test("模板文件结构合法（steps 套 step schema + vars 类型）且 targe
   for (const agentId of AGENTS) {
     const data = parse(readFileSync(join(AGENTS_DIR, agentId, "targets.yaml"), "utf8"));
     for (const [id, t] of Object.entries(data.targets)) {
+      if (!t.template) continue; // 内联 steps 型 target（如 approval-demo）不走模板链路
       const tplPath = join(AGENTS_DIR, agentId, "templates", `${t.template}.yaml`);
       const tpl = parse(readFileSync(tplPath, "utf8"));
       validateTemplate(agentId, t.template, tpl);
@@ -73,6 +74,7 @@ test("模板 {{var}} 插值无来源即失败（契约 §1.2：不静默替换�
   for (const agentId of AGENTS) {
     const data = parse(readFileSync(join(AGENTS_DIR, agentId, "targets.yaml"), "utf8"));
     for (const [id, t] of Object.entries(data.targets)) {
+      if (!t.template) continue; // 内联 steps 型：插值来源检查针对其自身 steps
       const tpl = parse(readFileSync(join(AGENTS_DIR, agentId, "templates", `${t.template}.yaml`), "utf8"));
       const available = new Set([...Object.keys(tpl.vars ?? {}), ...Object.keys(t.vars ?? {})]);
       for (const point of collectInterpolationPoints(tpl.steps)) {
