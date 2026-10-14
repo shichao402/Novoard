@@ -46,10 +46,13 @@
 
 ## M4 · A2A 能力面完备化（PRD-4，hub + agent 侧）
 
-- [ ] message/stream（SSE 步骤级进度，替换试点期"轮询 + 通知"顶替方案）
-- [ ] 审批门全链路（IM / Web / 磁贴三入口恢复、超时 TTL）
-- [ ] 授权矩阵完备化（试点最小版扩展）
+2026-10-14 落地并线上验收（commit ef15caa）：
+
+- [x] message/stream（SSE 步骤级进度）。`POST /a2a` JSON-RPC `message/stream`：queue 状态订阅（taskId 粒度回调）→ SSE 帧（`result: { kind: status-update|artifact-update, status, final }`）；agent 侧 runner onProgress 逐步骤上行 working 帧（status.message = "step i/n"），hub 幂等透传（working→working 允许同态转更新 message）；15s 心跳注释行保活；订阅前已终态补发快照即关。线上 AC1：dev-build 触发后立即订阅，step 1 失败详情实时透传 + final 终态帧
+- [x] 审批门全链路。agent 侧 requiresApproval 改挂起语义（input-required 非"试点期回执即终态"），pending 暂存执行参数；hub 新端点 `tasks/approve`（decision approve|reject），approve → tunnel 下行 `message/resume` → agent `startExecution` 继续跑，reject → canceled；三入口（IM AI / 面板 / 磁贴）共用同一份状态；TTL sweeper：input-required 超 10 分钟自动 canceled（approval-ttl-expired）+ 通知。测试覆盖 approve→completed、reject→canceled 两条链
+- [x] 授权矩阵完备化。`src/acl.mjs`：`.state/acl.yaml` 白名单（clients: [{client, allow, deny}]，pattern 支持 member/skill、member 整域、member/* 通配，deny 优先），运行时查表；未配置默认放行（单用户试点兼容）；dashboard/human 不受限；message/send 门禁拒绝留审计（acl-denied）。线上 AC4：真实 acl 验证 deny target 拒绝（明确文案）+ allow target 放行
 - [ ] 桌面 agent localhost A2A 端点（随 M5 载体决策）
+- 验收：PRD-4 AC1/AC3/AC4 过；AC2（IM 审批恢复）待 With 侧消费 tasks/approve（端点已通，测试已覆盖）；AC3 未暴露 target 拒绝由 M1 试点期已覆盖（no-such-skill → UNSUPPORTED）。测试 58/58 绿（+6 M4：SSE/审批门×2/ACL×2/agent-runtime resume）
 - [ ] 更多 A2A 客户端接入验证
 - 验收：PRD-4 AC1-AC4
 
