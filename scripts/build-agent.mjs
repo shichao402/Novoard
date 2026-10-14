@@ -44,23 +44,20 @@ function genEmbeddedSchemas() {
   writeFileSync(join(BUILD, "embedded-schemas.gen.mjs"), code, "utf8");
 }
 
-/** 2. esbuild bundle（CJS，ws 原生可选依赖 external 由运行时 try/catch 回退）。 */
-function bundle() {
+/** 2. esbuild bundle（CJS，ws 原生可选依赖 external 由运行时 try/catch 回退）。程序化 API：跨平台无 .bin shim 差异（Windows .bin 是 .cmd，spawn 会 ENOENT）。 */
+async function bundle() {
   step("esbuild bundle：sea-entry → build/sea-bundle.cjs");
-  execFileSync(
-    join(ROOT, "node_modules", ".bin", "esbuild"),
-    [
-      join(ROOT, "src", "lite-agent", "sea-entry.mjs"),
-      "--bundle",
-      "--platform=node",
-      "--format=cjs",
-      `--outfile=${join(BUILD, "sea-bundle.cjs")}`,
-      "--external:bufferutil",
-      "--external:cpu-features",
-      "--external:utf-8-validate",
-    ],
-    { stdio: "inherit", cwd: ROOT }
-  );
+  const esbuild = (await import("esbuild")).default ?? await import("esbuild");
+  const r = await esbuild.build({
+    entryPoints: [join(ROOT, "src", "lite-agent", "sea-entry.mjs")],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    outfile: join(BUILD, "sea-bundle.cjs"),
+    external: ["bufferutil", "cpu-features", "utf-8-validate"],
+    logLevel: "info",
+  });
+  if (r.errors.length) throw new Error("esbuild bundle 报错");
   if (!existsSync(join(BUILD, "sea-bundle.cjs"))) throw new Error("esbuild 产物缺失");
 }
 
@@ -80,8 +77,8 @@ function seaBlob() {
   if (!existsSync(join(BUILD, "sea-prep.blob"))) throw new Error("SEA blob 生成失败");
 }
 
-/** 4. 复制 node 并注入。 */
-function inject() {
+/** 4. 复制 node 并注入。程序化 postject API（跨平台无 .bin shim 问题）。 */
+async function inject() {
   step(`注入 blob 到 node 二进制（${targetPlatform}-${targetArch}）`);
   const isWin = targetPlatform === "win32";
   const outDir = join(DIST, `${targetPlatform}-${targetArch}`);
@@ -103,21 +100,25 @@ function inject() {
   // node 发行二进制只读（555），postject 需要可写
   chmodSync(exePath, isWin ? 0o666 : 0o755);
 
-  const postject = join(ROOT, "node_modules", ".bin", "postject");
+  const postject = (await import("postject")).inject ?? (await import("postject")).default?.inject;
   const sentinel = "NODE_SEA_BLOB";
   const FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2"; // Node.js 项目 SEA fuse（官方文档口径）
+  const blobData = readFileSync(join(BUILD, "sea-prep.blob"));
 
   if (targetPlatform === "darwin") {
     // macOS：先去签名复制件，注入后重签（ad-hoc）
     try {
       execFileSync("codesign", ["--remove-signature", exePath], { stdio: "inherit" });
     } catch { /* 未签名二进制无妨 */ }
-    execFileSync(postject, [exePath, sentinel, join(BUILD, "sea-prep.blob"), "--sentinel-fuse", FUSE, "--macho-segment-name", "NODE_SEA"], { stdio: "inherit" });
+    await postject(exePath, sentinel, blobData, {
+      sentinelFuse: FUSE,
+      machoSegmentName: "NODE_SEA",
+    });
     try {
       execFileSync("codesign", ["--sign", "-", exePath], { stdio: "inherit" });
     } catch { /* ad-hoc 签名失败不阻塞（用户可自签） */ }
   } else {
-    execFileSync(postject, [exePath, sentinel, join(BUILD, "sea-prep.blob"), "--sentinel-fuse", FUSE], { stdio: "inherit" });
+    await postject(exePath, sentinel, blobData, { sentinelFuse: FUSE });
   }
 
   // 附带发行件
@@ -141,14 +142,10 @@ Windows 提示：未签名 exe 首次运行会弹 SmartScreen——点"更多信
 
 async function main() {
   console.log(`Novoard agent SEA 打包：目标 ${targetPlatform}-${targetArch}，node ${process.version}`);
-  if (!existsSync(join(ROOT, "node_modules", ".bin", "esbuild"))) {
-    console.error("缺 devDependencies（esbuild/postject）：先 npm install");
-    process.exit(1);
-  }
   genEmbeddedSchemas();
-  bundle();
+  await bundle();
   seaBlob();
-  inject();
+  await inject();
   console.log(`\n完成。产物目录：${DIST}`);
 }
 
