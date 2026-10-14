@@ -36,11 +36,13 @@
 
 ## M3 · 通知与自动化规则完备化（PRD-3，Novoard 仓）
 
-- [ ] 企微 / Bark 扇出完备（终态、审批门、离线拒绝；Bark 双推试点已踩）
-- [ ] per-target `notify` 策略字段生效（契约 §1）
-- [ ] 通知频控（状态口径，防 digest 吞增量）
-- [ ] 规则引擎完备化 + 通用 webhook 入口（最小版试点已踩）
-- 验收：PRD-3 AC1-AC3
+2026-10-13/14 落地并线上验收（commit 17c8733）：
+
+- [x] 企微 / Bark 扇出完备。通知降级链三通道：企微智能机器人（主）→ 企微群 webhook（备）→ Bark（`barkUrl`+`barkDeviceKey` secrets，iOS 直达），任一成功即止全失败进日志；触发点四类：terminal / offline-reject / input-required / member-event（新增成员上线离线）
+- [x] per-target `notify` 策略字段生效（契约 §1）。targets.yaml `notify` 经 card skill `x-novoard-notify` 透传（schema 已收），hub `policyOf` 查表过滤终态通知；线上验证 AC2：smoke-test（on-failure）成功执行 → `[notify:skip] notify=on-failure 且非失败终态`，企微零推送
+- [x] 通知频控（状态口径，防 digest 吞增量）。同 target 同 (kind,state) 60s 窗口首条即发、后续 suppressed 计数，窗口到期 count>0 追发合并摘要——增量不丢仅延后呈现（issue-handler digest 教训落地）
+- [x] 规则引擎完备化 + 通用 webhook 入口。`POST /api/webhook/:source`（clientKey 鉴权）→ 审计落流水（actor `webhook:<source>`，outcome 枚举新增 `accepted`）→ 规则引擎；规则事件源三批：`task-terminal` / `member-online` / `member-offline` / `webhook-<source>`（body 整体作 vars 透传动作 target）；线上验证 AC3：webhook-ac3 → smoke-test 规则 17s 端到端 completed（受理→规则触发→执行→审计四环全链）
+- 验收：PRD-3 AC1-AC3 全过（AC1 失败通知已由 M1/M2 企微 bot 通道覆盖）。附带修复：queue seq 重启续号（防 taskId 撞号导致审计串台，test/queue-seq.test.mjs）；noop 模板合规 step schema。测试 52/52 绿（+7 M3 +1 seq）
 
 ## M4 · A2A 能力面完备化（PRD-4，hub + agent 侧）
 
