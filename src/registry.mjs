@@ -86,6 +86,12 @@ export function createRegistry({ validate, log = console } = {}) {
       return member;
     },
 
+    /** 已有任务按创建时绑定的 member 下发；不得因 skill 后续转移而漂移。 */
+    connected(agentId) {
+      const member = members.get(agentId);
+      return member?.conn ? member : null;
+    },
+
     /** skill 归属查询（不要求在线，M2）：offline 策略分流与离线入队定位 owner 用。 */
     ownerOf(skillId) {
       const agentId = skillIndex.get(skillId);
@@ -124,11 +130,14 @@ export function createRegistry({ validate, log = console } = {}) {
     },
 
     /** 聚合 Agent Card（契约 §2）：skills 并集 + x-novoard-members。 */
-    aggregateCard() {
+    aggregateCard({ skillAllowed = () => true } = {}) {
       const skills = [];
       const membersField = {};
       for (const member of members.values()) {
-        for (const skill of member.skills.values()) skills.push(skill);
+        const visibleSkills = [...member.skills.values()]
+          .filter((skill) => skillAllowed(member.agentId, skill));
+        if (!visibleSkills.length) continue;
+        skills.push(...visibleSkills);
         membersField[member.agentId] = { name: member.card.name, description: member.card.description };
       }
       return {

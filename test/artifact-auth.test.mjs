@@ -119,6 +119,128 @@ test("agent token 绑定 agentId，跨 member 状态伪造被拒", async () => {
   }
 });
 
+test("非法 Agent 状态在写盘前被拒，Hub 保持可用", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-agent-state-"));
+  const hub = await createHub({ stateDir, port: 0, log: { info() {}, error() {} } });
+  const port = hub.server.address().port;
+  configureTestAgentTokens(hub, { "agent-a": "agent-a-secret-token" });
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
+    headers: { Authorization: "Bearer agent-a-secret-token" },
+  });
+  try {
+    await once(socket, "open");
+    socket.send(JSON.stringify(hello("agent-a", "skill-a")));
+    await waitFor(() => hub.registry.ownerOf("skill-a")?.agentId === "agent-a");
+    const task = hub.queue.submit({
+      skillId: "skill-a",
+      target: "skill-a",
+      member: "agent-a",
+      actor: "test",
+      lane: "a2a",
+    });
+    socket.send(JSON.stringify({
+      v: 1,
+      kind: "a2a",
+      msgId: "e-invalid-state",
+      taskId: task.id,
+      ts: new Date().toISOString(),
+      body: {
+        jsonrpc: "2.0",
+        method: "message/notification",
+        params: {
+          message: {
+            messageId: "m-invalid-state",
+            role: "agent",
+            parts: [],
+            taskId: task.id,
+            kind: "status-update",
+            status: { state: "bogus", timestamp: new Date().toISOString() },
+          },
+        },
+      },
+    }));
+    await waitFor(() => hub.audit.list().some((entry) =>
+      entry.taskId === task.id && entry.detail?.reason === "invalid-task-state"));
+    assert.equal(hub.queue.get(task.id).state, "submitted");
+    assert.doesNotMatch(readFileSync(join(stateDir, "queue", "queue.jsonl"), "utf8"), /bogus/);
+    const response = await fetch(`http://127.0.0.1:${port}/api/setup/status`);
+    assert.equal(response.status, 200);
+  } finally {
+    socket.close();
+    await new Promise((resolve) => hub.server.close(resolve));
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("已有任务始终下发给创建时绑定的 member", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-task-binding-"));
+  const hub = await createHub({ stateDir, port: 0, log: { info() {}, error() {} } });
+  const sentA = [];
+  const sentB = [];
+  try {
+    hub.registry.register({
+      agentId: "agent-a",
+      card: card("agent-a", "shared-skill"),
+      conn: { readyState: 1, send: (raw) => sentA.push(JSON.parse(String(raw))) },
+    });
+    const task = hub.queue.submit({
+      skillId: "shared-skill",
+      target: "shared-skill",
+      member: "agent-a",
+      vars: { owner: "A-only" },
+      actor: "test",
+      lane: "a2a",
+    });
+    hub.registry.updateCard("agent-a", { ...card("agent-a", "shared-skill"), skills: [] });
+    hub.registry.register({
+      agentId: "agent-b",
+      card: card("agent-b", "shared-skill"),
+      conn: { readyState: 1, send: (raw) => sentB.push(JSON.parse(String(raw))) },
+    });
+
+    const delegated = await hub.delegate({ task, vars: task.vars });
+    assert.equal(delegated.ok, true);
+    assert.equal(sentA.some((frame) => frame.taskId === task.id && frame.body?.method === "message/send"), true);
+    assert.equal(sentB.some((frame) => frame.taskId === task.id), false);
+  } finally {
+    await new Promise((resolve) => hub.server.close(resolve));
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("Agent 重连时会收到其仍在执行但 Hub 已取消任务的 cancel", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "novoard-cancel-reconcile-"));
+  const hub = await createHub({ stateDir, port: 0, log: { info() {}, error() {} } });
+  const port = hub.server.address().port;
+  configureTestAgentTokens(hub, { "agent-a": "agent-a-secret-token" });
+  const task = hub.queue.submit({
+    skillId: "skill-a",
+    target: "skill-a",
+    member: "agent-a",
+    actor: "test",
+    lane: "a2a",
+  });
+  hub.queue.transition(task.id, "input-required");
+  hub.queue.transition(task.id, "canceled", { message: "approval-ttl-expired" });
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
+    headers: { Authorization: "Bearer agent-a-secret-token" },
+  });
+  const frames = [];
+  socket.on("message", (raw) => frames.push(JSON.parse(String(raw))));
+  try {
+    await once(socket, "open");
+    const helloFrame = hello("agent-a", "skill-a");
+    helloFrame.body.inFlightTaskIds = [task.id];
+    socket.send(JSON.stringify(helloFrame));
+    await waitFor(() => frames.some((frame) =>
+      frame.taskId === task.id && frame.body?.method === "tasks/cancel"));
+  } finally {
+    socket.close();
+    await new Promise((resolve) => hub.server.close(resolve));
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("artifact 校验 digest 与任务归属，下载按 PAT target 范围授权", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "novoard-artifact-auth-"));
   const hub = await createHub({ stateDir, port: 0, log: { info() {}, error() {} } });

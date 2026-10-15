@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 
 const LOGIN_WINDOW_MS = 15 * 60_000;
-const LOGIN_LIMIT_PER_KEY = 8;
+const LOGIN_LIMIT_PER_ACCOUNT = 8;
+const LOGIN_LIMIT_PER_SOURCE = 30;
 const GLOBAL_WINDOW_MS = 60_000;
 const GLOBAL_LIMIT = 120;
 
@@ -14,7 +15,8 @@ export function createAuth({
 } = {}) {
   if (!identity) throw new Error("Auth 需要 identity");
   const cookieName = secureCookies ? "__Host-novoard_session" : "novoard_session";
-  const attempts = new Map();
+  const accountAttempts = new Map();
+  const sourceAttempts = new Map();
   let globalAttempts = [];
   let nextAttemptCleanupAt = 0;
 
@@ -38,10 +40,13 @@ export function createAuth({
 
   function requireCsrf(req, authn) {
     if (!authn || authn.credential !== "session") return true;
-    const origin = String(req.headers.origin ?? "");
-    if (!safeEqual(origin, publicOrigin)) return false;
+    if (!requireOrigin(req)) return false;
     const supplied = String(req.headers["x-csrf-token"] ?? "");
     return safeEqual(supplied, authn.principal.csrfToken ?? "");
+  }
+
+  function requireOrigin(req) {
+    return safeEqual(String(req.headers.origin ?? ""), publicOrigin);
   }
 
   function setSessionCookie(res, token, expiresAt) {
@@ -72,34 +77,32 @@ export function createAuth({
     const current = now();
     globalAttempts = globalAttempts.filter((time) => current - time < GLOBAL_WINDOW_MS);
     if (current >= nextAttemptCleanupAt) {
-      for (const [key, times] of attempts) {
-        const active = times.filter((time) => current - time < LOGIN_WINDOW_MS);
-        if (active.length) attempts.set(key, active);
-        else attempts.delete(key);
-      }
+      pruneAttempts(accountAttempts, current);
+      pruneAttempts(sourceAttempts, current);
       nextAttemptCleanupAt = current + GLOBAL_WINDOW_MS;
     }
     if (globalAttempts.length >= GLOBAL_LIMIT) return false;
     globalAttempts.push(current);
 
-    const key = credentialKey(req, username, trustProxy);
-    const recent = (attempts.get(key) ?? []).filter((time) => current - time < LOGIN_WINDOW_MS);
-    if (recent.length >= LOGIN_LIMIT_PER_KEY) {
-      attempts.set(key, recent);
-      return false;
-    }
-    recent.push(current);
-    attempts.set(key, recent);
+    const accountKey = normalizedUsername(username);
+    const sourceKey = sourceIp(req, trustProxy);
+    const recentAccount = activeAttempts(accountAttempts, accountKey, current);
+    const recentSource = activeAttempts(sourceAttempts, sourceKey, current);
+    if (recentAccount.length >= LOGIN_LIMIT_PER_ACCOUNT
+      || recentSource.length >= LOGIN_LIMIT_PER_SOURCE) return false;
+    accountAttempts.set(accountKey, [...recentAccount, current]);
+    sourceAttempts.set(sourceKey, [...recentSource, current]);
     return true;
   }
 
-  function resetCredentialAttempts(req, username = "") {
-    attempts.delete(credentialKey(req, username, trustProxy));
+  function resetCredentialAttempts(_req, username = "") {
+    accountAttempts.delete(normalizedUsername(username));
   }
 
   return {
     authenticate,
     requireCsrf,
+    requireOrigin,
     setSessionCookie,
     clearSessionCookie,
     allowCredentialAttempt,
@@ -138,9 +141,20 @@ function sourceIp(req, trustProxy) {
   return (remote || "unknown").slice(0, 128);
 }
 
-function credentialKey(req, username, trustProxy) {
-  const normalized = String(username).normalize("NFKC").trim().toLowerCase().slice(0, 64);
-  return `${sourceIp(req, trustProxy)}:${normalized}`;
+function normalizedUsername(username) {
+  return String(username).normalize("NFKC").trim().toLowerCase().slice(0, 64);
+}
+
+function activeAttempts(attempts, key, current) {
+  return (attempts.get(key) ?? []).filter((time) => current - time < LOGIN_WINDOW_MS);
+}
+
+function pruneAttempts(attempts, current) {
+  for (const [key, times] of attempts) {
+    const active = times.filter((time) => current - time < LOGIN_WINDOW_MS);
+    if (active.length) attempts.set(key, active);
+    else attempts.delete(key);
+  }
 }
 
 function safeEqual(a, b) {

@@ -206,7 +206,10 @@ export function createWecomBot({
     // 帮助面：拉聚合 card 列出在线可触发能力
     let skills = "";
     try {
-      const card = await fetchImpl(`http://127.0.0.1:${localPort}/.well-known/agent-card.json`).then((r) => r.json());
+      const servicePat = secrets.get("wecomServicePat");
+      const card = await fetchImpl(`http://127.0.0.1:${localPort}/.well-known/agent-card.json`, {
+        headers: servicePat ? { Authorization: `Bearer ${servicePat}` } : {},
+      }).then((r) => r.json());
       skills = (card?.skills ?? []).map((s) => `> \`${s.id}\`（${s.name ?? ""}）`).join("\n") || "> （暂无在线能力，成员均离线）";
     } catch {
       skills = "> （能力清单暂不可用）";

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createHub } from "../src/main.mjs";
+import { createAuth } from "../src/auth.mjs";
 
 const ORIGIN = "http://test.local";
 
@@ -48,7 +49,7 @@ function sessionHeaders(cookie, csrf, extra = {}) {
 async function setupOwner(base) {
   const response = await fetch(`${base}/api/setup`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { Origin: ORIGIN, "Content-Type": "application/json" },
     body: JSON.stringify({
       username: "owner",
       displayName: "Owner",
@@ -69,6 +70,22 @@ test("HTTP 身份闭环：setup → session → 用户/角色/PAT → logout", a
     response = await fetch(`${base}/api/tasks`);
     assert.equal(response.status, 503);
     assert.equal((await response.json()).error, "setup_required");
+
+    response = await fetch(`${base}/api/setup`, {
+      method: "POST",
+      headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
+      body: JSON.stringify({ username: "attacker", password: "attacker password value" }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error, "origin_failed");
+
+    response = await fetch(`${base}/api/setup`, {
+      method: "POST",
+      headers: { Origin: ORIGIN, "Content-Type": "text/plain" },
+      body: JSON.stringify({ username: "attacker", password: "attacker password value" }),
+    });
+    assert.equal(response.status, 415);
+    assert.equal((await response.json()).error, "json_required");
 
     const owner = await setupOwner(base);
     assert.equal(owner.body.user.roleId, "superadmin");
@@ -163,7 +180,22 @@ test("会话写操作必须通过 Origin + CSRF，强制改密用户只能改密
 
     response = await fetch(`${base}/api/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { Origin: "https://evil.example", "Content-Type": "text/plain" },
+      body: JSON.stringify({ username: "reader", password: "temporary reader password" }),
+    });
+    assert.equal(response.status, 403);
+    assert.equal(response.headers.get("set-cookie"), null);
+
+    response = await fetch(`${base}/api/session`, {
+      method: "POST",
+      headers: { Origin: ORIGIN, "Content-Type": "text/plain" },
+      body: JSON.stringify({ username: "reader", password: "temporary reader password" }),
+    });
+    assert.equal(response.status, 415);
+
+    response = await fetch(`${base}/api/session`, {
+      method: "POST",
+      headers: { Origin: ORIGIN, "Content-Type": "application/json" },
       body: JSON.stringify({ username: "reader", password: "temporary reader password" }),
     });
     assert.equal(response.status, 200);
@@ -187,7 +219,7 @@ test("会话写操作必须通过 Origin + CSRF，强制改密用户只能改密
 
     response = await fetch(`${base}/api/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { Origin: ORIGIN, "Content-Type": "application/json" },
       body: JSON.stringify({ username: reader.username, password: "reader permanent password" }),
     });
     assert.equal(response.status, 200);
@@ -203,7 +235,7 @@ test("公开登录按来源与账号限速，错误响应不泄露账号是否�
     await setupOwner(base);
     const unknown = await fetch(`${base}/api/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { Origin: ORIGIN, "Content-Type": "application/json" },
       body: JSON.stringify({
         username: "not-a-user",
         password: "definitely the wrong password",
@@ -215,7 +247,7 @@ test("公开登录按来源与账号限速，错误响应不泄露账号是否�
     for (let attempt = 0; attempt < 8; attempt += 1) {
       const response = await fetch(`${base}/api/session`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { Origin: ORIGIN, "Content-Type": "application/json" },
         body: JSON.stringify({
           username: "owner",
           password: "definitely the wrong password",
@@ -226,7 +258,7 @@ test("公开登录按来源与账号限速，错误响应不泄露账号是否�
     }
     const limited = await fetch(`${base}/api/session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { Origin: ORIGIN, "Content-Type": "application/json" },
       body: JSON.stringify({
         username: "owner",
         password: "correct horse battery staple",
@@ -240,6 +272,35 @@ test("公开登录按来源与账号限速，错误响应不泄露账号是否�
   }
 });
 
+test("登录限速分别约束账号与可信来源，并会清理过期键", () => {
+  let clock = Date.now();
+  const request = (ip) => ({
+    headers: { "x-real-ip": ip },
+    socket: { remoteAddress: "127.0.0.1" },
+  });
+  const byAccount = createAuth({
+    identity: {},
+    trustProxy: true,
+    now: () => clock,
+  });
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    assert.equal(byAccount.allowCredentialAttempt(request(`10.0.0.${attempt}`), "owner"), true);
+  }
+  assert.equal(byAccount.allowCredentialAttempt(request("10.0.0.99"), "owner"), false);
+
+  const bySource = createAuth({
+    identity: {},
+    trustProxy: true,
+    now: () => clock,
+  });
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    assert.equal(bySource.allowCredentialAttempt(request("10.0.1.1"), `user-${attempt}`), true);
+  }
+  assert.equal(bySource.allowCredentialAttempt(request("10.0.1.1"), "another-user"), false);
+  clock += 15 * 60_000 + 1;
+  assert.equal(bySource.allowCredentialAttempt(request("10.0.1.1"), "another-user"), true);
+});
+
 test("RBAC 列表过滤与 target 范围在 REST 入口一致生效", async () => {
   const { hub, base, stateDir, close } = await boot();
   try {
@@ -250,7 +311,7 @@ test("RBAC 列表过滤与 target 范围在 REST 入口一致生效", async () =
       id: "mac-work-only",
       name: "Mac Work Only",
       permissions: ["system.read", "targets.read", "targets.execute", "tasks.read", "audit.read"],
-      targetAllow: ["mac-work/*"],
+      targetAllow: ["mac-work/safe-target"],
       targetDeny: [],
     });
     const user = await hub.identity.createUser(owner, {
@@ -264,16 +325,16 @@ test("RBAC 列表过滤与 target 范围在 REST 入口一致生效", async () =
     const issued = await hub.identity.createPat(principal, { name: "scope-test" });
     const headers = { Authorization: `Bearer ${issued.token}` };
 
-    const card = (name, skill) => ({
+    const card = (name, ...skills) => ({
       name,
       description: name,
       version: "1.0.0",
       capabilities: { streaming: false, pushNotifications: true },
       defaultInputModes: ["text"],
       defaultOutputModes: ["text", "file"],
-      skills: [{ id: skill, name: skill, description: skill, tags: [] }],
+      skills: skills.map((skill) => ({ id: skill, name: skill, description: skill, tags: [] })),
     });
-    hub.registry.register({ agentId: "mac-work", card: card("work", "safe-target"), conn: { readyState: 1, send() {} } });
+    hub.registry.register({ agentId: "mac-work", card: card("work", "safe-target", "hidden-same-member"), conn: { readyState: 1, send() {} } });
     hub.registry.register({ agentId: "mac-home", card: card("home", "hidden-target"), conn: { readyState: 1, send() {} } });
     hub.queue.submit({ skillId: "safe-target", target: "safe-target", member: "mac-work", actor: "test", lane: "a2a" });
     hub.queue.submit({ skillId: "hidden-target", target: "hidden-target", member: "mac-home", actor: "test", lane: "a2a" });
@@ -286,11 +347,28 @@ test("RBAC 列表过滤与 target 范围在 REST 入口一致生效", async () =
     const tasks = (await response.json()).tasks;
     assert.deepEqual(tasks.map((task) => task.target), ["safe-target"]);
 
+    await hub.ingestWebhook({
+      source: "private-source",
+      body: { secret: "TOP-SECRET" },
+      actor: "pat:owner/test",
+      principal: owner,
+    });
+    response = await fetch(`${base}/api/events`, { headers });
+    const scopedEvents = (await response.json()).events;
+    assert.equal(scopedEvents.some((event) => event.detail?.source === "private-source"), false);
+    assert.doesNotMatch(JSON.stringify(hub.audit.list()), /TOP-SECRET/);
+
     response = await fetch(`${base}/api/status`, { headers });
     const status = await response.json();
     assert.deepEqual(status.members.map((member) => member.agentId), ["mac-work"]);
+    assert.equal(status.members[0].skillCount, 1);
     assert.equal(status.tasks.total, 1);
     assert.equal("secrets" in status, false);
+
+    response = await fetch(`${base}/.well-known/agent-card.json`);
+    assert.equal(response.status, 401);
+    response = await fetch(`${base}/.well-known/agent-card.json`, { headers });
+    assert.deepEqual((await response.json()).skills.map((skill) => skill.id), ["safe-target"]);
 
     response = await fetch(`${base}/api/trigger`, {
       method: "POST",

@@ -2,7 +2,8 @@
  * 最小规则引擎（PRD-5 F5 / PRD-3 F3 雏形）：
  * 规则形态：when <event> then run <target>（YAML 定义，定义时判断，运行时只匹配——ADR-0005 同款纪律）。
  * 事件源（首批）：task 终态事件（hub 侧 tunnel 上行钩子）。
- * 动作不旁路：规则触发的新任务走既有 submit → delegate 全链路（PRD-3 F3 硬约束），actor 记 rule-engine。
+ * 动作不旁路：规则触发的新任务走既有 submit → delegate 全链路（PRD-3 F3 硬约束）；
+ * 装配层保留来源 actor/授权上下文，无来源的系统事件才记 rule-engine。
  * 防环：规则产生的任务带 ruleTrace（链上出现同规则即拒绝）——A 完成触发 B、B 完成触发 A 的死循环在定义期挡不住，运行期靠 trace 断链。
  * 规则完备化（时间窗口、webhook 源、agent 上线/离线源）留 M3。
  */

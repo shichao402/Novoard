@@ -94,7 +94,7 @@ steps:
 ```
 
 - 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description = title + vars 参数说明；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）
-- 聚合 card = 所有在线成员 card 的 skills 并集，附 `x-novoard-members` 扩展字段（member id → 寻址信息）；skill id 冲突时注册拒绝并回执，先到先得
+- 聚合 card = 当前调用主体 target 范围内的 skills 并集，附同样经过过滤的 `x-novoard-members`（member id → 寻址信息）；端点要求会话或 PAT 的 `targets.read` 权限。skill id 冲突时注册拒绝并回执，先到先得
 - card 经 JWS 签名（A2A 防伪造），密钥管理见 §8
 
 ## 3. ops 帧枚举（旁路车道）
@@ -217,13 +217,14 @@ fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 �
 
 ### 5.2 AI 客户端门 —— A2A 字面端点
 
-- `GET /.well-known/agent-card.json` → 聚合 Agent Card（§2）
+- `GET /.well-known/agent-card.json` → 聚合 Agent Card（§2）；要求会话或 PAT，并按角色与 PAT 的 target allow/deny 过滤
 - `POST /a2a` → JSON-RPC 2.0：`message/send`、`message/stream`（SSE，M4）、`tasks/get`、`tasks/cancel`、`tasks/approve`（审批门恢复，M4）
 - `message/stream`：SSE 步骤级进度——订阅 task 状态变更；帧形状 `result: { kind: "status-update"|"artifact-update", taskId, status, final }`；agent 步骤进度以非终态 working 帧（status.message = "step i/n"）透传；15s 心跳注释行保活；连接前已终态则补发快照即关
 - `message/resume`（hub → agent 下行，M4 审批门）：params `{ id, decision: "approve" }`；agent 侧 input-required 挂起 → 恢复执行；拒绝走 `tasks/cancel`
 - `tasks/approve`（A2A 客户端 → hub，M4）：params `{ id, decision: "approve"|"reject" }`；仅 input-required 状态可恢复；三入口（IM AI / 面板 / 磁贴）共用此端点，状态只有一份
-- 审批门 TTL：input-required 挂起超 10 分钟自动 canceled（`approval-ttl-expired`）+ 通知
-- 统一授权：会话与 PAT 都解析为用户主体，按“权限 → target 范围”裁决；PAT 的有效权限和 allow/deny 分别与用户当前角色取交集，deny 优先。列表过滤无权资源，按 id 读取无权资源返回 404；拒绝留安全审计。旧 `.state/acl.yaml`、`clientKeys`、`dashboard/human` 绕过均已删除
+- 审批门 TTL：input-required 挂起超 10 分钟自动 canceled（`approval-ttl-expired`）+ 通知，并向创建任务时绑定的 Agent 下发 `tasks/cancel`；Agent 离线时由 Hub 持久状态在其携带 in-flight 清单重连后补发
+- 统一授权：会话与 PAT 都解析为用户主体，按“权限 → target 范围”裁决；PAT 的有效权限和 allow/deny 分别与用户当前角色取交集，deny 优先。列表（含聚合 card 和状态计数）过滤无权资源，按 id 读取无权资源返回 404；不存在与无权 target 使用相同外部错误，拒绝原因只留安全审计。旧 `.state/acl.yaml`、`clientKeys`、`dashboard/human` 绕过均已删除
+- Hub 任务状态枚举与转换表封闭校验；Agent 非法状态或非法转换在写盘前拒绝并关闭违规连接。所有下发、恢复、取消都使用 task 创建时持久化的 `member`，不能因 card 更新或 skill 转移改投其他成员
 
 ```json
 { "jsonrpc": "2.0", "id": "req-2", "method": "tasks/get", "params": { "id": "task-20261012-001" } }
@@ -235,10 +236,11 @@ fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 �
 
 | 场景 | 错误 |
 | --- | --- |
-| 请求 `expose: local` 的 target（查无 skill） | `-32004 Operation not supported`，message 注明 `target expose=local, no remote capability` |
+| 请求 `expose: local` 的 target（查无 skill） | `-32004 Operation not supported：target not remotely triggerable` |
 | taskId 不存在 | `-32001 Task not found` |
 | 任务已终态不可取消 | `-32002 Task not cancelable` |
-| 身份无效或越权 target | HTTP 401/403；A2A JSON-RPC 返回 `-32000 非法请求`，且无权资源按 404 隐藏 |
+| 身份无效 | HTTP 401/403 或 A2A `-32000 非法请求` |
+| target 不存在或调用主体无权 | REST 统一 404；A2A 统一 `-32004 Operation not supported: target not remotely triggerable` |
 
 ## 6. 审计事件
 
@@ -250,7 +252,7 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
   "outcome": "completed", "audit": "summary", "member": "mac-work" }
 ```
 
-- 字段：ts、actor（`user:<id>` / `pat:<id>` / `agent:<id>` / `wecom:<senderUserId>` / `rule-engine` / `server:break-glass`）、lane（a2a/ops/local）、target、taskId、outcome（task 状态枚举）、audit 待遇、member；detail 可选。口令、会话令牌、PAT 与 agent token 明文绝不入审计
+- 字段：ts、actor（`user:<id>` / `pat:<id>` / `agent:<id>` / `wecom:<senderUserId>` / `rule-engine` / `server:break-glass`）、lane（a2a/ops/local）、target、taskId、outcome（task 状态枚举）、audit 待遇、member；detail 可选。口令、会话令牌、PAT、agent token 与 webhook 正文明文绝不入审计；webhook 只记录 source、正文 SHA-256、字节数和顶层键名
 - 落 hub 侧与 agent 侧各一份，可对账（§4.4 幂等去重保证两侧不因重放错账）
 - 规则触发、审批门、离线拒绝全部进流水（PRD-5 NFR 审计同车道）
 
@@ -260,7 +262,7 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 - 通知渠道降级链：企微智能机器人（主）→ 企微群 webhook（备）→ Bark（iOS 直达，`barkUrl` + `barkDeviceKey` secrets）；任一成功即止，全失败进日志不阻塞主流程
 - 频控（状态口径，防吞增量）：同 target 同 (kind,state) 60s 窗口内，首条立即发送，后续计数累积；窗口到期 suppressed>0 追发一条合并摘要——增量不丢，仅延后呈现
 - 通知触发点：terminal（终态）/ offline-reject / input-required / member-event（上线离线，M3 新增）
-- 外部事件入口（F4）：`POST /api/webhook/:source`（具备 `webhooks.invoke` 的 PAT）→ 审计落流水（actor 保留 PAT 身份并记录 source）→ 规则引擎消费（事件名 `webhook-<source>`，body 整体作为 vars 透传给动作 target）
+- 外部事件入口（F4）：`POST /api/webhook/:source`（具备 `webhooks.invoke` 的 PAT）→ 审计落流水（actor 保留 PAT 身份，只记录 source 与正文摘要）→ 规则引擎消费（事件名 `webhook-<source>`，body 仅在内存中作为 vars 透传）。任务只持久化 PAT/user id，不保存明文 token；首层及后续 task-terminal 续链的每个规则动作都重新解析 PAT 当前状态与 target 范围，吊销、过期、用户禁用或降权后 fail-closed，规则引擎不得成为提权通道
 - 规则事件源（F3 首批三源）：`task-terminal` / `member-online` / `member-offline` / `webhook-<source>`
 
 ### 6.6 审批门全链路（M4）
@@ -268,7 +270,7 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 - target `requiresApproval: true` → agent 侧挂起（非终态 input-required，与试点期"回执即终态"语义不兼容变更），hub task 停在 input-required
 - 恢复三入口共用 `tasks/approve`（状态只有一份）：IM AI 回填 / Web 面板确认 / 本地磁贴确认（磁贴随 M5 载体）
 - 恢复链：`tasks/approve` → hub 下行 `message/resume` → agent `startExecution` → 上行 working/终态；拒绝走 `tasks/cancel`（挂起任务 agent 侧直接出队）
-- TTL：超 10 分钟自动 canceled（`approval-ttl-expired`），sweeper 与离线队列同频扫描
+- TTL：超 10 分钟自动 canceled（`approval-ttl-expired`），sweeper 与离线队列同频扫描；reject 与 TTL 都必须下发 `tasks/cancel`，离线 Agent 重连时按 in-flight 清单补发
 
 ## 7. artifact 语义
 
@@ -284,20 +286,20 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 
 - 全新实例只公开 `GET /api/setup/status`、`POST /api/setup` 和初始化页面。`POST /api/setup` 在跨进程锁内原子创建首个 `superadmin` 并写入 `.state/install.json` 的 `initializedAt`；并发请求只有一个成功
 - setup 是明确的 first-claim：部署者必须在上线后立即认领。初始化后入口永久返回 410；identity 缺失/损坏、install 已初始化但数据不一致、检测到旧共享凭据状态时 fail-closed，绝不重新开放
-- 浏览器登录使用随机不透明会话，服务端只存哈希；Cookie 为 `HttpOnly + Secure + SameSite=Strict + Path=/`，写请求同时校验可信 Origin 和 CSRF token。会话只保存 userId，每次请求读取用户和角色，因此禁用、改密、换角色立即生效
-- 用户口令用异步 scrypt + 独立随机盐。登录采用统一失败文案，并按账号和可信来源限速。只有本机 nginx 来源才允许其 `X-Real-IP`
+- 浏览器登录使用随机不透明会话，服务端只存哈希；Cookie 为 `HttpOnly + Secure + SameSite=Strict + Path=/`。setup/login 要求精确匹配可信 Origin 与 `application/json`，已登录写请求再校验 Origin + CSRF token。会话只保存 userId，每次请求读取用户和角色，因此禁用、改密、换角色立即生效
+- 用户口令用异步 scrypt + 独立随机盐。登录采用统一失败文案，并分别按账号、可信来源和全局窗口限速。只有本机 nginx 来源才允许其 `X-Real-IP`
 
 ### 8.2 角色与个人访问令牌
 
 - 内置角色：`superadmin`、`admin`、`operator`、`viewer`；内置角色不可编辑/删除。自定义角色只能组合固定业务权限，且 target 默认拒绝、deny 优先
 - `superadmin` 只能由现有 superadmin 授予或撤销；最后一个有效 superadmin 不可禁用、删除或降级。服务器 `node src/admin.mjs recover <username>` 仅能恢复已存在的 superadmin，不能创建用户、提权或重开 setup
-- PAT 前缀 `nvp_`，256 bit 随机值，identity 只存哈希；明文只在创建响应出现一次。PAT scope 只允许机器接口权限，不能登录后台、管理身份或管理 PAT；其 scope/target 范围与用户当前角色动态取交集，过期、吊销、用户禁用和角色降权立即生效
+- PAT 前缀 `nvp_`，256 bit 随机值，identity 只存哈希；明文只在创建响应出现一次。PAT scope 只允许机器接口权限，显式传入时必须是非空数组；不能登录后台、管理身份或管理 PAT。其 scope/target 范围与用户当前角色动态取交集，过期、吊销、用户禁用和角色降权立即生效
 - 企微使用不可登录的 `wecom-bot` 服务账号与最小 scope PAT。单聊校验 sender 白名单，群聊同时校验 sender/chat，默认空白名单拒绝；服务 PAT 只对超级管理员可见/可吊销，轮换顺序为签发并验证新令牌 → 切换消费端 → 吊销旧令牌
 
 ### 8.3 agent 凭据
 
 - agent token 前缀 `nva_`，hub 的 0600 私密配置仅保存 `agentId → sha256(token)`；明文只在超级管理员创建/轮换凭据时返回一次
-- token 只允许 WebSocket Upgrade 与 artifact 上传，不能充当用户/PAT。吊销后新连接和上传立即 401；已建立连接在断线重连时失效
+- token 只允许 WebSocket Upgrade 与 artifact 上传，不能充当用户/PAT。吊销后新连接和上传立即 401；已建立连接在断线重连时失效。本机 secrets 字段未落盘时才读取环境变量，管理面显式清空会持久化空值墓碑，不能因环境变量回退而复活已撤销 token 或白名单
 - JWS/card 签名仍属后续强化项；v2.0 的身份边界以 TLS + 绑定 agentId 的 Bearer token + 每帧 task/member 校验为准
 
 ## 9. schemas 目录（机器可校验的 SSOT）

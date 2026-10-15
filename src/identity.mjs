@@ -274,6 +274,28 @@ export async function createIdentityStore({
     return principalFor({ kind: "pat", user, identity, pat });
   }
 
+  function authorizationContext(principal) {
+    if (principal?.kind !== "pat" || !principal.user?.id || !principal.pat?.id) return null;
+    return {
+      kind: "pat",
+      userId: principal.user.id,
+      patId: principal.pat.id,
+    };
+  }
+
+  /** 供异步规则续链使用：不保存明文 token，每一步都按当前身份状态重新解析。 */
+  async function principalFromAuthorization(authorization) {
+    if (!authorization || authorization.kind !== "pat") return null;
+    const { identity } = await loadState();
+    const pat = identity.pats.find((candidate) =>
+      candidate.id === authorization.patId
+      && candidate.userId === authorization.userId);
+    if (!pat || pat.revokedAt || (pat.expiresAt && Date.parse(pat.expiresAt) <= now())) return null;
+    const user = identity.users.find((candidate) => candidate.id === pat.userId);
+    if (!user || user.disabled || user.securityVersion !== pat.securityVersion) return null;
+    return principalFor({ kind: "pat", user, identity, pat });
+  }
+
   async function logout(token) {
     const parsed = parseOpaqueToken(token, "nvs");
     if (!parsed) return false;
@@ -518,9 +540,18 @@ export async function createIdentityStore({
         throw identityError("invalid-pat-kind", "服务 PAT 只能属于服务账号，个人 PAT 只能属于登录用户");
       }
       const role = roleById(identity, user.roleId);
-      const requestedScopes = Array.isArray(scopes) && scopes.length
-        ? uniqueStrings(scopes)
-        : role.permissions.filter((permission) => PAT_PERMISSIONS.includes(permission));
+      let requestedScopes;
+      if (scopes === undefined) {
+        requestedScopes = role.permissions.filter((permission) => PAT_PERMISSIONS.includes(permission));
+      } else {
+        if (!Array.isArray(scopes) || scopes.length === 0) {
+          throw identityError("invalid-pat-scope", "PAT scope 必须是至少包含一项权限的数组");
+        }
+        requestedScopes = uniqueStrings(scopes);
+        if (requestedScopes.length === 0) {
+          throw identityError("invalid-pat-scope", "PAT scope 不能为空");
+        }
+      }
       if (requestedScopes.some((scope) => !PAT_PERMISSIONS.includes(scope))) {
         throw identityError("invalid-pat-scope", "PAT scope 只能包含机器接口权限");
       }
@@ -766,6 +797,8 @@ export async function createIdentityStore({
     logout,
     authenticateSession,
     authenticatePat,
+    authorizationContext,
+    principalFromAuthorization,
     listUsers,
     listRoles,
     createUser,
@@ -790,6 +823,11 @@ export async function createIdentityStore({
       if (!scopeAllows(principal.roleTargetAllow, principal.roleTargetDeny, resource, member)) return false;
       if (principal.kind !== "pat") return true;
       return scopeAllows(principal.patTargetAllow, principal.patTargetDeny, resource, member);
+    },
+    hasGlobalTargetAccess(principal) {
+      if (!principal || !scopeCoversAll(principal.roleTargetAllow, principal.roleTargetDeny)) return false;
+      return principal.kind !== "pat"
+        || scopeCoversAll(principal.patTargetAllow, principal.patTargetDeny);
     },
     files: { installFile, identityFile, sessionsFile },
   };
@@ -922,6 +960,10 @@ function patternMatches(pattern, resource, member) {
 function scopeAllows(allow, deny, resource, member) {
   if (deny.some((pattern) => patternMatches(pattern, resource, member))) return false;
   return allow.some((pattern) => patternMatches(pattern, resource, member));
+}
+
+function scopeCoversAll(allow, deny) {
+  return allow.includes("*") && deny.length === 0;
 }
 
 function assertAnotherSuperadmin(identity, excludedUserId) {

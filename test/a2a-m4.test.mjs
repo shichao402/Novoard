@@ -183,12 +183,14 @@ test("F3 审批门：tasks/approve reject → canceled", async () => {
   const port = hub.server.address().port;
   configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
   const auth = await bootstrapTestAuth(hub);
+  const cancelFrames = [];
   const agent = fakeAgent({
     port, token: "agt_test_token_12345678", card: CARD(),
     driver: ({ env, uplink }) => {
       if (env.body?.method === "message/send") {
         setTimeout(() => uplink(env.taskId, "input-required", "等待审批"), 50);
       }
+      if (env.body?.method === "tasks/cancel") cancelFrames.push(env);
     },
   });
   try {
@@ -200,16 +202,76 @@ test("F3 审批门：tasks/approve reject → canceled", async () => {
     });
     const { result: task } = await sendRes.json();
     await new Promise((r) => setTimeout(r, 200));
+    const invalidRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers: auth.headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tasks/approve", params: { id: task.id, decision: "typo" } }),
+    });
+    const invalidBody = await invalidRes.json();
+    assert.equal(invalidBody.error.code, -32000);
+    assert.equal(hub.queue.get(task.id).state, "input-required");
+
     const rejectRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
       headers: auth.headers,
-      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tasks/approve", params: { id: task.id, decision: "reject" } }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tasks/approve", params: { id: task.id, decision: "reject" } }),
     });
     assert.equal(rejectRes.status, 200);
     assert.equal(hub.queue.get(task.id).state, "canceled");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(cancelFrames.some((frame) => frame.taskId === task.id), true);
   } finally {
     agent.close();
     await new Promise((r) => hub.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("F3 审批门：TTL 到期会取消 Hub 任务并下发 Agent cancel", async () => {
+  const dir = tmpDir();
+  const hub = await createHub({
+    stateDir: dir,
+    port: 0,
+    offlineSweepMs: 20,
+    approvalTtlMs: 50,
+    log: { info() {}, error() {} },
+  });
+  const port = hub.server.address().port;
+  configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
+  const auth = await bootstrapTestAuth(hub);
+  const cancelFrames = [];
+  const agent = fakeAgent({
+    port,
+    token: "agt_test_token_12345678",
+    card: CARD(),
+    driver: ({ env, uplink }) => {
+      if (env.body?.method === "message/send") {
+        setTimeout(() => uplink(env.taskId, "input-required", "等待审批"), 20);
+      }
+      if (env.body?.method === "tasks/cancel") cancelFrames.push(env);
+    },
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const response = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers: auth.headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "message/send",
+        params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test" }] } },
+      }),
+    });
+    const { result: task } = await response.json();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(hub.queue.get(task.id).state, "canceled");
+    assert.equal(cancelFrames.some((frame) => frame.taskId === task.id), true);
+    assert.ok(hub.audit.list().some((event) =>
+      event.taskId === task.id && event.detail?.reason === "approval-ttl-expired"));
+  } finally {
+    agent.close();
+    await new Promise((resolve) => hub.server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -299,14 +361,22 @@ test("F4 RBAC：角色与 PAT target allow/deny 取交集 + 拒绝留审计", as
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "message/send", params: { message: { messageId: "m2", role: "user", parts: [{ kind: "text", text: "danger-target@mac-home" }] } } }),
     });
     const denyBody = await denyRes.json();
-    assert.match(denyBody.error?.message ?? "", /target scope denied/);
+    assert.match(denyBody.error?.message ?? "", /target not remotely triggerable/);
     assert.ok(hub.audit.list().some((e) => e.target === "danger-target" && e.outcome === "rejected" && e.detail?.reason === "target-scope-denied"));
+
+    const missingRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "message/send", params: { message: { messageId: "m3", role: "user", parts: [{ kind: "text", text: "missing-target" }] } } }),
+    });
+    const missingBody = await missingRes.json();
+    assert.deepEqual(missingBody.error, denyBody.error, "无权与不存在 target 的外部错误必须一致");
 
     // 未注册 client：拒绝
     const unregRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer nvp_0000000000000000_invalidinvalidinvalidinvalidinvalidinvalid" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "message/send", params: { message: { messageId: "m3", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "message/send", params: { message: { messageId: "m4", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
     });
     assert.equal(unregRes.status, 401);
   } finally {

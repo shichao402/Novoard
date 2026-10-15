@@ -5,6 +5,7 @@
  * startServer 返回 listen Promise，delegate 以 getter 注入避免 Promise 时序问题。
  */
 import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createFrameValidator } from "./frames.mjs";
 import { createAuditLog } from "./audit.mjs";
@@ -27,6 +28,7 @@ export async function createHub({
   rulesPath = process.env.NOVOARD_RULES,
   webDir = process.env.NOVOARD_WEB_DIR ?? join(process.cwd(), "web", "dist"),
   offlineSweepMs = 30_000,
+  approvalTtlMs = 10 * 60_000,
   publicOrigin = process.env.NOVOARD_PUBLIC_ORIGIN ?? "https://novoard.firoyang.com",
   secureCookies = process.env.NOVOARD_SECURE_COOKIES !== "0",
   log = console,
@@ -91,9 +93,10 @@ export async function createHub({
     return owned?.skill?.["x-novoard-notify"] ?? "always";
   }
 
-  // 规则引擎接终态事件：动作不旁路（PRD-3 F3），走 submit → delegate 全链路，actor 记 rule-engine
-  const notifyAndRules = async ({ event }) => {
-    await notify.emit({ event, policy: event.kind === "terminal" ? policyOf(event.target) : "always" });
+  // 规则引擎接终态事件：动作不旁路，走 submit → delegate 全链路；有来源主体时保留 actor 与授权边界。
+  const notifyAndRules = async ({ event, principal = null }) => {
+    const { authorization: _authorization, ...notificationEvent } = event;
+    await notify.emit({ event: notificationEvent, policy: event.kind === "terminal" ? policyOf(event.target) : "always" });
     if (rules.count === 0) return;
     // 事件源统一进规则引擎（F3 首批三源）：task 终态 / member 上线离线 / webhook 外部事件
     let ruleEvent = null;
@@ -103,19 +106,55 @@ export async function createHub({
     if (!ruleEvent) return;
 
     const ruleTrace = ruleEvent.taskId ? queue.get(ruleEvent.taskId)?.ruleTrace ?? [] : [];
-    const actions = rules.evaluate(ruleEvent);
+    const authorization = event.authorization ?? identity.authorizationContext(principal);
+    const effectivePrincipal = principal
+      ?? (authorization ? await identity.principalFromAuthorization(authorization) : null);
+    const authorizationInvalid = !!authorization && !effectivePrincipal;
+    const actions = rules.evaluate({ ...ruleEvent, ruleTrace });
     for (const action of actions) {
+      const actionActor = event.actor ?? "rule-engine";
+      const knownOwner = registry.ownerOf(action.target);
+      if (authorizationInvalid) {
+        audit.append({
+          actor: actionActor,
+          lane: "a2a",
+          target: action.target,
+          outcome: "rejected",
+          detail: { reason: "rule-authorization-invalid", viaRule: action.viaRule },
+        }, validate.auditEvent);
+        continue;
+      }
+      if (effectivePrincipal && knownOwner
+        && !identity.targetAllowed(effectivePrincipal, knownOwner.agentId, action.target)) {
+        audit.append({
+          actor: actionActor,
+          lane: "a2a",
+          target: action.target,
+          outcome: "rejected",
+          detail: { reason: "rule-target-scope-denied", viaRule: action.viaRule },
+        }, validate.auditEvent);
+        continue;
+      }
       const owner = action.member
         ? registry.status().find((s) => s.agentId === action.member) && registry.resolve(action.target)?.agentId === action.member
           ? registry.resolve(action.target)
           : null
         : registry.resolve(action.target);
       if (!owner) {
-        audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, outcome: "rejected", detail: { reason: registry.knows(action.target) ? "member-offline" : "no-such-skill" } }, validate.auditEvent);
+        audit.append({ actor: actionActor, lane: "a2a", target: action.target, outcome: "rejected", detail: { reason: registry.knows(action.target) ? "member-offline" : "no-such-skill", viaRule: action.viaRule } }, validate.auditEvent);
         continue;
       }
-      const task = queue.submit({ skillId: action.target, target: action.target, member: owner.agentId, vars: action.vars ?? {}, actor: "rule-engine", lane: "a2a", ruleTrace: action.ruleTrace });
-      audit.append({ actor: "rule-engine", lane: "a2a", target: action.target, taskId: task.id, outcome: "submitted", detail: { reason: `规则触发：${ruleEvent.event}${ruleEvent.state ? " " + ruleEvent.state : ""}${ruleEvent.taskId ? " ← " + ruleEvent.taskId : ""}` } }, validate.auditEvent);
+      const task = queue.submit({
+        skillId: action.target,
+        target: action.target,
+        member: owner.agentId,
+        vars: action.vars ?? {},
+        actor: actionActor,
+        lane: "a2a",
+        ruleTrace: action.ruleTrace,
+        authorization,
+      });
+      audit.append({ actor: actionActor, lane: "a2a", target: action.target, taskId: task.id, outcome: "submitted", detail: { reason: `规则触发：${ruleEvent.event}${ruleEvent.state ? " " + ruleEvent.state : ""}${ruleEvent.taskId ? " ← " + ruleEvent.taskId : ""}`, viaRule: action.viaRule } }, validate.auditEvent);
       delegate({ task, vars: action.vars ?? {} }).catch((error) => log.error?.(`规则任务下发失败 ${task.id}：${error.message}`));
     }
   };
@@ -134,23 +173,39 @@ export async function createHub({
   }
 
   // 审批门 TTL（M4 F3）：input-required 超时（默认 10 分钟）自动 rejected + 通知
-  const APPROVAL_TTL_MS = 10 * 60_000;
   function sweepApprovalGate() {
     for (const task of queue.list({ state: "input-required" })) {
       const age = Date.now() - Date.parse(task.updatedAt);
-      if (age > APPROVAL_TTL_MS) {
+      if (age > approvalTtlMs) {
         queue.transition(task.id, "canceled", { message: "approval-ttl-expired" });
         audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "canceled", detail: { reason: "approval-ttl-expired" } }, validate.auditEvent);
         notify.emit({ event: { kind: "terminal", taskId: task.id, target: task.target, state: "canceled", reason: "approval-ttl-expired" } }).catch(() => {});
+        delegate({ task: queue.get(task.id), vars: task.vars, cancel: true })
+          .catch((error) => log.error?.(`[approval-gate] ${task.id} 取消下发失败：${error.message}`));
         log.info?.(`[approval-gate] ${task.id} 审批超时转 canceled（approval-ttl-expired）`);
       }
     }
   }
 
   /** 外部事件入口（F4）：webhook 落流水 + 规则消费 + 通知面（member-event 类同理给面板）。 */
-  const ingestWebhook = async ({ source, body, actor = `webhook:${source}` }) => {
-    audit.append({ actor, lane: "a2a", target: "-", outcome: "accepted", detail: { reason: `外部事件：${source}`, source, body: body ?? {} } }, validate.auditEvent);
-    await notifyAndRules({ event: { kind: "webhook", source, body } });
+  const ingestWebhook = async ({ source, body, actor = `webhook:${source}`, principal = null }) => {
+    const serializedBody = JSON.stringify(body ?? {});
+    audit.append({
+      actor,
+      lane: "a2a",
+      target: "-",
+      outcome: "accepted",
+      detail: {
+        reason: `外部事件：${source}`,
+        source,
+        bodySha256: createHash("sha256").update(serializedBody).digest("hex"),
+        bodyBytes: Buffer.byteLength(serializedBody),
+        bodyKeys: body && typeof body === "object" && !Array.isArray(body)
+          ? Object.keys(body).slice(0, 32)
+          : [],
+      },
+    }, validate.auditEvent);
+    await notifyAndRules({ event: { kind: "webhook", source, body, actor }, principal });
   };
 
   const serverPromise = startServer({

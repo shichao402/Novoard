@@ -1,5 +1,6 @@
 /**
- * 本机私密配置：文件优先、环境变量回退，写入采用临时文件 + rename，权限 0600。
+ * 本机私密配置：字段未落盘时才回退环境变量；显式空值作为撤销墓碑保留。
+ * 写入采用临时文件 + rename，权限 0600。
  * 用户 PAT 只在 identity.json 存哈希；企微消费端是唯一需要保留服务 PAT 明文的本地组件。
  */
 import {
@@ -106,20 +107,16 @@ export function createSecrets({ dir, env = process.env } = {}) {
       if (!STRING_FIELDS.includes(field) && !LIST_FIELDS.includes(field) && !MAP_FIELDS.includes(field)) {
         throw new Error(`未知凭据字段：${field}`);
       }
-      const fromFile = loadFile()[field];
+      const data = loadFile();
+      const hasFileValue = Object.hasOwn(data, field);
+      const fromFile = hasFileValue ? data[field] : env[ENV_KEYS[field]];
       if (isMap(field)) {
-        const map = toAgentTokenHashes(fromFile);
-        if (Object.keys(map).length) return map;
-        return toAgentTokenHashes(env[ENV_KEYS[field]]);
+        return toAgentTokenHashes(fromFile);
       }
       if (isList(field)) {
-        const list = toList(fromFile);
-        if (list.length) return list;
-        return toList(env[ENV_KEYS[field]]);
+        return toList(fromFile);
       }
-      const str = norm(fromFile);
-      if (str) return str;
-      return norm(env[ENV_KEYS[field]]);
+      return norm(fromFile);
     },
     set(values) {
       const data = loadFile();
@@ -128,17 +125,11 @@ export function createSecrets({ dir, env = process.env } = {}) {
           throw new Error(`未知凭据字段：${key}`);
         }
         if (isMap(key)) {
-          const map = toAgentTokenHashes(value);
-          if (Object.keys(map).length) data[key] = map;
-          else delete data[key];
+          data[key] = toAgentTokenHashes(value);
         } else if (isList(key)) {
-          const list = toList(value);
-          if (list.length) data[key] = list;
-          else delete data[key];
+          data[key] = toList(value);
         } else {
-          const str = norm(value);
-          if (str) data[key] = str;
-          else delete data[key];
+          data[key] = norm(value);
         }
       }
       mkdirSync(dirname(file), { recursive: true });
