@@ -22,4 +22,4 @@ jobs:
       - name: Contract copy gate
         run: node scripts/check-contract-copy.mjs
       - name: Note
-        run: echo "hub repo release: contract gate only; agent binaries live in novoard-agent repo"
+        run: echo 'hub repo release - contract gate only; agent binaries live in novoard-agent repo'
