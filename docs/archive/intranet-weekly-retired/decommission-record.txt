@@ -1,0 +1,31 @@
+{"ts":"2026-10-13T08:44:17.614Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261013-002","outcome":"working"}
+{"ts":"2026-10-13T08:44:17.624Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261013-002","outcome":"failed","detail":"step 1 失败：fatal: cannot change to '/srv/autoworks': No such file or directory\n"}
+{"ts":"2026-10-14T02:52:33.316Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261014-005","outcome":"working"}
+{"ts":"2026-10-14T02:52:33.325Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261014-005","outcome":"failed","detail":"step 1 失败：fatal: cannot change to '/srv/autoworks': No such file or directory\n"}
+{"ts":"2026-10-14T03:34:36.008Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261014-015","outcome":"working"}
+{"ts":"2026-10-14T03:34:36.014Z","actor":"agent:intranet-weekly","lane":"a2a","target":"weekly-report","taskId":"task-20261014-015","outcome":"failed","detail":"step 1 失败：fatal: cannot change to '/srv/autoworks': No such file or directory\n"}
+{"v":1,"kind":"a2a","msgId":"e-e48e1e13","taskId":"task-20261013-002","ts":"2026-10-13T08:44:17.624Z","body":{"jsonrpc":"2.0","method":"message/notification","params":{"message":{"messageId":"msg-de91f9cb","role":"agent","parts":[],"contextId":"task-20261013-002","taskId":"task-20261013-002","kind":"status-update","status":{"state":"failed","message":"step 1 失败：fatal: cannot change to '/srv/autoworks': No such file or directory\n","timestamp":"2026-10-13T08:44:17.624Z"}}}}}
+{"v":1,"kind":"a2a","msgId":"e-d86112c2","taskId":"task-20261014-015","ts":"2026-10-14T03:34:36.014Z","body":{"jsonrpc":"2.0","method":"message/notification","params":{"message":{"messageId":"msg-7ac17c8d","role":"agent","parts":[],"contextId":"task-20261014-015","taskId":"task-20261014-015","kind":"status-update","status":{"state":"failed","message":"step 1 失败：fatal: cannot change to '/srv/autoworks': No such file or directory\n","timestamp":"2026-10-14T03:34:36.014Z"}}}}}
+{
+  "agentId": "intranet-weekly",
+  "hubUrl": "wss://novoard.firoyang.com/tunnel",
+  "agentToken": "5202f69d96db7937e9fa17a2b6bed1121c58e719dabfe6aa799d525d4cd1f4ff",
+  "contractVersion": "1.0"
+}---TARGETS---
+# Novoard · intranet-weekly（内网服务器 · 周报 agent）target 定义
+# 契约 §1；周报类 target 定时归 agent 本地 cron（schedule 字段，ADR-0003 调度归属）
+# 通知上交 hub 扇出（notify: always）；artifact 上 hub 存证（契约 §7）
+# 检查逻辑来自 autoworks 收编（research 0004 姿势二：保留进程做运行时，命令化、幂等、退出码带语义）
+
+targets:
+  weekly-report:
+    title: 生成内网周报
+    schedule: "0 9 * * 1"
+    template: run-weekly-report
+    vars:
+      repoDir: /srv/autoworks
+      outDir: /srv/autoworks/out
+    expose: a2a
+    audit: full
+    requiresApproval: false
+    notify: always

@@ -1,6 +1,6 @@
 /**
  * 试点 target 定义集合校验（PRD-5 落地顺序第 1 步）。
- * 纪律二（CI 门禁）：agents/ 下三份 targets.yaml + 两类模板走 docs/architecture/schemas/target.json，
+ * 纪律二（CI 门禁）：agents/ 下 targets.yaml + 模板走 docs/architecture/schemas/target.json，
  * 与 hub 运行期同一 SSOT。模板结构 = steps + vars 默认值（契约 §1.3），无 title/expose 等 target 级字段，
  * 故模板校验走"steps 数组逐元素套 step schema + vars 类型断言"，不整体套 target schema。
  */
@@ -15,7 +15,7 @@ import { createFrameValidator } from "../src/frames.mjs";
 const AGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "agents");
 const validator = createFrameValidator();
 
-const AGENTS = ["mac-work", "mac-home", "intranet-weekly"];
+const AGENTS = ["mac-work", "mac-home"];
 
 /** 校验 stepTemplate 文件：steps 逐元素套 schema 的 step 定义（oneOf 四类）+ vars 值类型。 */
 function validateTemplate(agentId, tplId, tpl) {
