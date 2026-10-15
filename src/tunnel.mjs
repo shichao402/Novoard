@@ -12,6 +12,8 @@ import { authenticateAgentToken } from "./agent-auth.mjs";
 export const CONTRACT_VERSION = "2.0";
 const PING_INTERVAL_MS = 30_000;
 const PING_TIMEOUT_MS = 60_000;
+const AGENT_REPORTED_STATES = new Set(["working", "input-required", "completed", "failed", "canceled"]);
+const LOCAL_MIRROR_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 
 export function attachTunnel({ server, registry, queue, audit, secrets, artifacts, validate, notify, log = console }) {
   const wss = new WebSocketServer({ noServer: true });
@@ -87,9 +89,17 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
         }
         queue.markMsg(envelope.msgId);
       }
-      handleFrame(ws, envelope, (id) => {
-        agentId = id;
-      });
+      try {
+        handleFrame(ws, envelope, (id) => {
+          agentId = id;
+        });
+      } catch (error) {
+        log.error?.(`处理 agent 帧失败：${error.message}`);
+        if (envelope.kind === "a2a") rejectAgentFrame(ws, envelope, error.code ?? "invalid-agent-frame");
+        else {
+          try { ws.close(1008, "invalid-agent-frame"); } catch { /* noop */ }
+        }
+      }
     });
 
     ws.on("close", () => {
@@ -157,6 +167,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       agentIdOf(ws, body.agentId);
       onAgentBound?.(body.agentId);
       sendEnvelope(ws, opsFrame({ type: "agent.hello.ack", inFlightTaskIds: body.inFlightTaskIds ?? [] }));
+      reconcileCanceledTasks(ws, body.agentId, body.inFlightTaskIds ?? []);
       audit.append({
         actor: `agent:${body.agentId}`,
         lane: "ops",
@@ -219,31 +230,58 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       const task = queue.get(taskId);
       if (!task && taskId.startsWith("task-local-")) {
         // 本地磁贴触发的终态镜像（ADR-0008）：hub 不建 task，但 ack + 落审计（本地闭环的可见性镜像）
-        if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId });
-        if (state) {
-          audit.append({ actor: `agent:${agentId}`, lane: "a2a", target: "-", taskId, outcome: state, detail: { via: "tile-local-mirror" } }, validate.auditEvent);
+        if (!LOCAL_MIRROR_STATES.has(state)) {
+          rejectAgentFrame(ws, envelope, "invalid-local-task-state");
+          return;
         }
+        if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId });
+        audit.append({ actor: `agent:${agentId}`, lane: "a2a", target: "-", taskId, outcome: state, detail: { via: "tile-local-mirror" } }, validate.auditEvent);
+        return;
+      }
+      if (!task) {
+        rejectAgentFrame(ws, envelope, "task-not-found");
         return;
       }
       if (task && task.member !== agentId) {
         rejectAgentFrame(ws, envelope, "task-member-mismatch", task);
         return;
       }
-      if (state && task) {
-        // working 帧（步骤进度）幂等转：state 不变仅 message 更新；input-required/终态正常转
-        queue.transition(taskId, state, { message: message?.status?.message });
-        audit.append({
-          actor: `agent:${task.member}`,
-          lane: "a2a",
-          target: task.target,
-          taskId,
-          outcome: state,
-        }, validate.auditEvent);
-        if (queue.isTerminal(state)) {
-          notify?.({ event: { kind: "terminal", taskId, target: task.target, state } });
-        }
-        sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+      if (!AGENT_REPORTED_STATES.has(state)) {
+        rejectAgentFrame(ws, envelope, "invalid-task-state", task);
+        return;
       }
+      let transition;
+      try {
+        // working 帧（步骤进度）幂等转：state 不变仅 message 更新；input-required/终态正常转。
+        transition = queue.transitionChecked(taskId, state, { message: message?.status?.message });
+      } catch (error) {
+        rejectAgentFrame(ws, envelope, error.code ?? "invalid-task-transition", task);
+        return;
+      }
+      if (!transition.changed) {
+        sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+        return;
+      }
+      audit.append({
+        actor: `agent:${task.member}`,
+        lane: "a2a",
+        target: task.target,
+        taskId,
+        outcome: state,
+      }, validate.auditEvent);
+      if (queue.isTerminal(state)) {
+        Promise.resolve(notify?.({
+          event: {
+            kind: "terminal",
+            taskId,
+            target: task.target,
+            state,
+            actor: task.actor,
+            authorization: task.authorization,
+          },
+        })).catch((error) => log.error?.(`终态通知或规则处理失败 ${taskId}：${error.message}`));
+      }
+      sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
       return;
     }
 
@@ -306,9 +344,9 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
 
   /** 下发钩子（server.mjs delegate）：message/send 委派 或 tasks/cancel，走隧道 a2a 帧。 */
   async function delegate({ task, vars = {}, cancel = false, resume = false }) {
-    const member = registry.resolve(task.skillId);
+    const member = registry.connected(task.member);
     if (!member?.conn) {
-      log.error?.(`下发失败：${task.skillId} 成员离线`);
+      log.error?.(`下发失败：任务 ${task.id} 绑定成员 ${task.member} 离线`);
       return { ok: false, reason: "member-offline" };
     }
     if (cancel) {
@@ -357,6 +395,21 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
     });
     queue.transition(task.id, "working");
     return { ok: true };
+  }
+
+  function reconcileCanceledTasks(ws, agentId, inFlightTaskIds) {
+    for (const taskId of inFlightTaskIds) {
+      const task = queue.get(taskId);
+      if (!task || task.member !== agentId || task.state !== "canceled") continue;
+      sendEnvelope(ws, {
+        v: 1,
+        kind: "a2a",
+        msgId: newMsgId(),
+        taskId: task.id,
+        ts: new Date().toISOString(),
+        body: { jsonrpc: "2.0", method: "tasks/cancel", params: { id: task.id } },
+      });
+    }
   }
 
   function opsFrame(body) {

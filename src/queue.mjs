@@ -7,6 +7,19 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } fr
 import { join } from "node:path";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
+const TASK_STATES = new Set([
+  "submitted",
+  "queued-offline",
+  "working",
+  "input-required",
+  ...TERMINAL_STATES,
+]);
+const ALLOWED_TRANSITIONS = new Map([
+  ["submitted", new Set(["queued-offline", "working", "input-required", ...TERMINAL_STATES])],
+  ["queued-offline", new Set(["working", "canceled", "failed", "rejected"])],
+  ["working", new Set(["working", "input-required", ...TERMINAL_STATES])],
+  ["input-required", new Set(["working", "completed", "failed", "canceled", "rejected"])],
+]);
 
 let seq = 0;
 
@@ -43,6 +56,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         try {
           const task = JSON.parse(line);
           if (task?.id) {
+            task.authorization = normalizeAuthorization(task.authorization);
             index.set(task.id, task);
             // seq 续号：按当日已存最大序号恢复，防止重启后 taskId 撞号（审计对账依赖 id 唯一）
             const m = String(task.id).match(/^task-(\d{4})(\d{2})(\d{2})-(\d+)$/);
@@ -66,8 +80,8 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
   }
 
   function snapshot(task) {
-    const { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt } = task;
-    return { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt };
+    const { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization } = task;
+    return { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization };
   }
 
   return {
@@ -75,7 +89,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
     subscribe,
 
     /** 触发入队：生成 task id、建 task 对象、落盘、入索引。 */
-    submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "" }) {
+    submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "", authorization = null }) {
       const id = `task-${new Date(now()).toISOString().slice(0, 10).replace(/-/g, "")}-${String(++seq).padStart(3, "0")}`;
       const ts = new Date(now()).toISOString();
       const task = {
@@ -92,6 +106,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         updatedAt: ts,
         requiresApproval,
         ruleTrace,
+        authorization: normalizeAuthorization(authorization),
         expiresAt,
         queuedOfflineAt: expiresAt ? ts : "",
         status: { state: "submitted", timestamp: ts },
@@ -105,29 +120,49 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       return task;
     },
 
-    /** 状态翻转（working/input-required/终态），终态只允许一次（幂等）；working→working 幂等（步骤进度 message 更新）。 */
-    transition(taskId, state, extra = {}) {
+    /**
+     * 状态翻转并报告是否实际变更。相同终态重放是幂等；不同终态是冲突，
+     * 必须在调用方产生审计、通知或规则副作用前失败。
+     */
+    transitionChecked(taskId, state, extra = {}) {
       const task = index.get(taskId);
-      if (!task) return null;
-      if (TERMINAL_STATES.has(task.state)) return task;
-      if (task.state === state && state !== "working") return task; // 同态重复转（working 除外）：幂等跳
+      if (!task) return { task: null, changed: false };
+      if (!TASK_STATES.has(state)) {
+        throw taskStateError("invalid-task-state", `非法任务状态：${state}`);
+      }
+      if (TERMINAL_STATES.has(task.state)) {
+        if (task.state === state) return { task, changed: false };
+        throw taskStateError("invalid-task-transition", `非法任务状态转换：${task.state} → ${state}`);
+      }
+      if (task.state === state && state !== "working") return { task, changed: false };
+      if (!ALLOWED_TRANSITIONS.get(task.state)?.has(state)) {
+        throw taskStateError("invalid-task-transition", `非法任务状态转换：${task.state} → ${state}`);
+      }
       const ts = new Date(now()).toISOString();
       task.state = state;
       task.updatedAt = ts;
-      task.status = { state, timestamp: ts, ...extra };
+      task.status = { ...extra, state, timestamp: ts };
       if (TERMINAL_STATES.has(state) || state === "working") {
         task.expiresAt = "";
         task.queuedOfflineAt = "";
       }
       persist(snapshot(task));
       emit(task);
-      return task;
+      return { task, changed: true };
+    },
+
+    /** 兼容既有调用方：只返回任务快照。 */
+    transition(taskId, state, extra = {}) {
+      return this.transitionChecked(taskId, state, extra).task;
     },
 
     /** 离线入队快照（M2）：queued-offline 状态 + expiresAt 留存（pendingOffline / sweeper 依赖）。 */
     markQueuedOffline(taskId, expiresAtTs) {
       const task = index.get(taskId);
       if (!task) return null;
+      if (task.state !== "submitted") {
+        throw taskStateError("invalid-task-transition", `非法任务状态转换：${task.state} → queued-offline`);
+      }
       const ts = new Date(now()).toISOString();
       task.state = "queued-offline";
       task.updatedAt = ts;
@@ -173,6 +208,14 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       };
     },
 
+    /** HTTP 列表可见形状：剥离仅供 hub 内部规则续链使用的授权上下文。 */
+    toPublic(taskOrId) {
+      const task = typeof taskOrId === "string" ? index.get(taskOrId) : taskOrId;
+      if (!task) return null;
+      const { authorization: _authorization, ...visible } = snapshot(task);
+      return visible;
+    },
+
     get(taskId) {
       return index.get(taskId) ?? null;
     },
@@ -202,4 +245,19 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       return [...index.values()].filter((t) => !TERMINAL_STATES.has(t.state));
     },
   };
+}
+
+function taskStateError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function normalizeAuthorization(value) {
+  if (!value || value.kind !== "pat"
+    || !/^[a-f0-9-]{36}$/i.test(String(value.userId))
+    || !/^[a-f0-9]{16}$/.test(String(value.patId))) {
+    return null;
+  }
+  return { kind: "pat", userId: String(value.userId), patId: String(value.patId) };
 }

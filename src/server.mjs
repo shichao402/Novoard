@@ -1,6 +1,6 @@
 /**
  * HTTP 门与 A2A 端点（契约 §5，两扇门，ADR-0004）：
- *   GET  /.well-known/agent-card.json   聚合 Agent Card（能力声明公开）
+ *   GET  /.well-known/agent-card.json   按调用主体 target 范围过滤的聚合 Agent Card
  *   POST /a2a                           JSON-RPC 2.0：message/send、tasks/get、tasks/cancel
  *   POST /api/trigger                   人类客户端门（iOS 快捷指令 / 企微 bot / Web 面板）
  *   POST /api/artifacts                 artifact 上传（agent token 鉴权，内联上限 5MB）
@@ -198,7 +198,14 @@ export function startServer({
     if (!owner) {
       if (registry.knows(target)) {
         // skill 存在但成员离线：按 target offline 策略分流（契约 §5.1 / §1.1，M2）
-        const placed = placeOfflineTask({ target, memberHint, actor, vars, lane: "a2a" });
+        const placed = placeOfflineTask({
+          target,
+          memberHint,
+          actor,
+          vars,
+          lane: "a2a",
+          authorization: identity.authorizationContext(authn.principal),
+        });
         sendJson(res, 202, placed.body);
         return;
       }
@@ -208,7 +215,15 @@ export function startServer({
       return;
     }
 
-    const task = queue.submit({ skillId: target, target, member: owner.agentId, vars, actor, lane: "a2a" });
+    const task = queue.submit({
+      skillId: target,
+      target,
+      member: owner.agentId,
+      vars,
+      actor,
+      lane: "a2a",
+      authorization: identity.authorizationContext(authn.principal),
+    });
     auditLine({ target, taskId: task.id, outcome: "submitted" }, actor, "a2a");
     sendJson(res, 202, { taskId: task.id, state: "submitted" });
     delegate?.({ task, vars }).catch((error) => {
@@ -223,7 +238,7 @@ export function startServer({
    *        成员上线（tunnel hello 钩子）自动补下发，TTL 到期 sweeper 转 failed。
    * 返回 202 响应体（两扇门共用）。
    */
-  function placeOfflineTask({ target, memberHint = "", actor, vars = {}, lane = "a2a", contextId = "" }) {
+  function placeOfflineTask({ target, memberHint = "", actor, vars = {}, lane = "a2a", contextId = "", authorization = null }) {
     const owned = registry.ownerOf(target);
     const policy = owned?.skill?.["x-novoard-offline"]?.policy ?? "reject";
     if (policy !== "queue") {
@@ -232,7 +247,7 @@ export function startServer({
       return { body: { state: "rejected", reason: "member-offline" } };
     }
     const ttlMs = parseDuration(owned?.skill?.["x-novoard-offline"]?.ttl ?? "30m") ?? 30 * 60_000;
-    const task = queue.submit({ skillId: target, target, member: owned.agentId, vars, actor, lane, contextId });
+    const task = queue.submit({ skillId: target, target, member: owned.agentId, vars, actor, lane, contextId, authorization });
     queue.markQueuedOffline(task.id, Date.now() + ttlMs);
     auditLine({ target, taskId: task.id, outcome: "submitted", detail: { reason: "member-offline-queued", ttl: owned?.skill?.["x-novoard-offline"]?.ttl ?? "30m" } }, actor, lane);
     return { body: { taskId: task.id, state: "queued-offline", reason: "member-offline", expiresAt: queue.get(task.id).expiresAt } };
@@ -322,13 +337,21 @@ export function startServer({
       const member = knownOwner?.agentId ?? memberHint ?? "";
       if (knownOwner && !identity.targetAllowed(authn.principal, member, skillId)) {
         auditLine({ target: skillId, outcome: "rejected", detail: { reason: "target-scope-denied" } }, actor, "a2a");
-        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "target scope denied");
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "target not remotely triggerable");
         return;
       }
       if (!owner) {
         if (registry.knows(skillId)) {
           // 成员离线：按 target offline 策略分流（契约 §5.1，M2）——queue 则入队返回 task，reject 则报错
-          const placed = placeOfflineTask({ target: skillId, memberHint, actor, vars: {}, lane: "a2a", contextId: typeof message.contextId === "string" ? message.contextId : "" });
+          const placed = placeOfflineTask({
+            target: skillId,
+            memberHint,
+            actor,
+            vars: {},
+            lane: "a2a",
+            contextId: typeof message.contextId === "string" ? message.contextId : "",
+            authorization: identity.authorizationContext(authn.principal),
+          });
           if (placed.body.state === "queued-offline") {
             rpcResult(res, rpc.id, queue.toA2A(placed.body.taskId));
           } else {
@@ -337,7 +360,7 @@ export function startServer({
           return;
         }
         auditLine({ target: skillId, outcome: "rejected", detail: { reason: "no-such-skill" } }, actor, "a2a");
-        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "target expose=local, no remote capability");
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "target not remotely triggerable");
         return;
       }
       const task = queue.submit({
@@ -348,6 +371,7 @@ export function startServer({
         actor,
         lane: "a2a",
         contextId: typeof message.contextId === "string" ? message.contextId : "",
+        authorization: identity.authorizationContext(authn.principal),
       });
       auditLine({ target: skillId, taskId: task.id, outcome: "submitted" }, actor, "a2a");
       rpcResult(res, rpc.id, queue.toA2A(task.id));
@@ -407,7 +431,11 @@ export function startServer({
     if (rpc.method === "tasks/approve") {
       // M4 F3：审批门恢复端点（IM AI / 面板 / 磁贴三入口共用同一份状态）
       const id = String(rpc.params?.id ?? "");
-      const decision = rpc.params?.decision === "reject" ? "reject" : "approve";
+      const decision = rpc.params?.decision;
+      if (!["approve", "reject"].includes(decision)) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.ILLEGAL, "decision 必须是 approve 或 reject");
+        return;
+      }
       const raw = queue.get(id);
       if (!raw || !identity.hasPermission(authn.principal, "tasks.approve")
         || !identity.targetAllowed(authn.principal, raw.member, raw.target)) {
@@ -421,7 +449,22 @@ export function startServer({
       if (decision === "reject") {
         queue.transition(id, "canceled", { message: `审批拒绝：${actor}` });
         auditLine({ target: raw.target, taskId: id, outcome: "canceled", detail: { reason: `approval-rejected by ${actor}` } }, actor, "a2a");
-        notify?.({ event: { kind: "terminal", taskId: id, target: raw.target, state: "canceled", reason: "approval-rejected" } });
+        notify?.({
+          event: {
+            kind: "terminal",
+            taskId: id,
+            target: raw.target,
+            state: "canceled",
+            reason: "approval-rejected",
+            actor: raw.actor,
+            authorization: raw.authorization,
+          },
+        });
+        try {
+          await delegate?.({ task: queue.get(id), vars: raw.vars, cancel: true });
+        } catch (error) {
+          log.error?.(`审批拒绝取消下发失败 ${id}：${error.message}`);
+        }
         rpcResult(res, rpc.id, queue.toA2A(id));
         return;
       }
@@ -463,6 +506,14 @@ export function startServer({
           sendJson(res, 410, { error: "setup_closed" });
           return;
         }
+        if (!auth.requireOrigin(req)) {
+          sendJson(res, 403, { error: "origin_failed" });
+          return;
+        }
+        if (!isJsonRequest(req)) {
+          sendJson(res, 415, { error: "json_required" });
+          return;
+        }
         let payload;
         try {
           payload = await readJson(req);
@@ -491,6 +542,14 @@ export function startServer({
       }
 
       if (req.method === "POST" && pathname === "/api/session") {
+        if (!auth.requireOrigin(req)) {
+          sendJson(res, 403, { error: "origin_failed" });
+          return;
+        }
+        if (!isJsonRequest(req)) {
+          sendJson(res, 415, { error: "json_required" });
+          return;
+        }
         let payload;
         try {
           payload = await readJson(req);
@@ -576,7 +635,12 @@ export function startServer({
       }
 
       if (req.method === "GET" && pathname === "/.well-known/agent-card.json") {
-        sendJson(res, 200, registry.aggregateCard());
+        const authn = await requirePrincipal(req, res, "targets.read");
+        if (!authn) return;
+        sendJson(res, 200, registry.aggregateCard({
+          skillAllowed: (agentId, skill) =>
+            identity.targetAllowed(authn.principal, agentId, skill.id),
+        }));
         return;
       }
 
@@ -941,7 +1005,7 @@ export function startServer({
         } catch {
           body = {};
         }
-        await ingestWebhook?.({ source, body, actor });
+        await ingestWebhook?.({ source, body, actor, principal: authn.principal });
         sendJson(res, 202, { accepted: true, source, actor });
         return;
       }
@@ -949,16 +1013,22 @@ export function startServer({
       if (req.method === "GET" && pathname === "/api/status") {
         const authn = await requirePrincipal(req, res, "system.read");
         if (!authn) return;
-        const visibleMemberIds = new Set(
+        const visibleSkillCounts = new Map(
           registry.catalog()
-            .filter((member) => (member.skills ?? []).some((skill) => identity.targetAllowed(authn.principal, member.agentId, skill.id)))
-            .map((member) => member.agentId),
+            .map((member) => [
+              member.agentId,
+              (member.skills ?? []).filter((skill) =>
+                identity.targetAllowed(authn.principal, member.agentId, skill.id)).length,
+            ])
+            .filter(([, count]) => count > 0),
         );
         const tasks = queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target));
         const body = {
           version: process.env.NOVOARD_VERSION ?? "dev",
           startedAt: server.startedAt ?? null,
-          members: registry.status().filter((member) => visibleMemberIds.has(member.agentId)),
+          members: registry.status()
+            .filter((member) => visibleSkillCounts.has(member.agentId))
+            .map((member) => ({ ...member, skillCount: visibleSkillCounts.get(member.agentId) })),
           tasks: {
             total: tasks.length,
             active: tasks.filter((t) => !queue.isTerminal(t.state)).length,
@@ -984,7 +1054,9 @@ export function startServer({
         const authn = await requirePrincipal(req, res, "tasks.read");
         if (!authn) return;
         sendJson(res, 200, {
-          tasks: queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target)),
+          tasks: queue.list()
+            .filter((task) => identity.targetAllowed(authn.principal, task.member, task.target))
+            .map((task) => queue.toPublic(task)),
         });
         return;
       }
@@ -994,7 +1066,9 @@ export function startServer({
         if (!authn) return;
         sendJson(res, 200, {
           events: audit.list().filter((event) => {
-            if (!event.target || event.target === "hub" || event.target === "-") return true;
+            if (!event.target || event.target === "hub" || event.target === "-" || event.target === "wecom") {
+              return identity.hasGlobalTargetAccess(authn.principal);
+            }
             const task = event.taskId ? queue.get(event.taskId) : null;
             const member = event.member ?? task?.member;
             if (!member) return identity.hasPermission(authn.principal, "users.manage");
@@ -1089,6 +1163,10 @@ function plainVars(v) {
     if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") out[k] = val;
   }
   return out;
+}
+
+function isJsonRequest(req) {
+  return /^application\/json(?:\s*;|$)/i.test(String(req.headers["content-type"] ?? "").trim());
 }
 
 function firstText(parts = []) {

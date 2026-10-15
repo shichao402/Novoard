@@ -161,6 +161,10 @@ test("PAT：只存哈希、scope 不可越权、吊销和用户禁用立即生�
       store.createPat(principal, { name: "bad", scopes: ["targets.execute"] }),
       (error) => error.code === "scope-exceeds-role",
     );
+    await assert.rejects(
+      store.createPat(principal, { name: "empty", scopes: [] }),
+      (error) => error.code === "invalid-pat-scope",
+    );
     const issued = await store.createPat(principal, {
       name: "readonly",
       scopes: ["system.read", "tasks.read"],

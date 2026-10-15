@@ -1,7 +1,7 @@
 /**
  * 通知扇出与规则引擎最小版测试（PRD-5 F1/F5）：
  * notify：webhook 未配置降级日志、已配置推送企微 markdown、频控窗口合并。
- * rules：YAML 装载校验、终态事件匹配、动作不旁路（走队列 submit、actor=rule-engine）、ruleTrace 防环。
+ * rules：YAML 装载校验、终态事件匹配、动作不旁路（走队列 submit 并保留来源 actor）、ruleTrace 防环。
  * 规则端到端：dev-build completed → smoke-test 自动入队（fake agent 承接）。
  */
 import { test } from "node:test";
@@ -152,14 +152,15 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
     const { taskId } = await res.json();
     await waitFor(() => hub.queue.get(taskId)?.state === "completed", 5000);
 
-    // 规则链上的 smoke-test 任务出现且 actor=rule-engine
-    await waitFor(() => hub.queue.list().some((t) => t.target === "smoke-test" && t.actor === "rule-engine"), 3000);
+    // 规则链保留原始调用主体，便于审计并持续套用其授权边界
+    const triggerActor = `pat:test-owner/${auth.pat.name}`;
+    await waitFor(() => hub.queue.list().some((t) => t.target === "smoke-test" && t.actor === triggerActor), 3000);
     const smoke = hub.queue.list().find((t) => t.target === "smoke-test");
     assert.ok(smoke, "规则应已产生 smoke-test 任务");
     assert.deepEqual(smoke.ruleTrace, ["smoke-test"]);
     await waitFor(() => hub.queue.get(smoke.id)?.state === "completed", 5000); // 动作不旁路：委派真实执行
     // 规则触发进审计（PRD-5 NFR 审计同车道）
-    assert.ok(hub.audit.list().some((e) => e.actor === "rule-engine" && e.target === "smoke-test" && e.outcome === "submitted"));
+    assert.ok(hub.audit.list().some((e) => e.actor === triggerActor && e.target === "smoke-test" && e.outcome === "submitted"));
   } finally {
     agent?.close();
     await new Promise((r) => hub.server.close(r));

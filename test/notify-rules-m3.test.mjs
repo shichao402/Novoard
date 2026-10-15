@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { createNotify } from "../src/notify.mjs";
 import { createHub } from "../src/main.mjs";
-import { bootstrapTestAuth } from "./test-auth.mjs";
+import { bootstrapTestAuth, configureTestAgentTokens } from "./test-auth.mjs";
 
 function tmpStateDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m3-"));
@@ -138,10 +138,232 @@ test("hub 装配：webhook 入口鉴权 + 规则联动 webhook-source → run ta
     assert.equal(body.accepted, true);
     await new Promise((r) => setTimeout(r, 80));
     const events = hub.audit.list();
-    assert.ok(events.some((e) => e.actor === `pat:test-owner/${auth.pat.name}` && e.outcome === "accepted" && e.detail?.source === "deploy-notify"));
-    assert.ok(events.some((e) => e.actor === "rule-engine" && e.target === "smoke-test" && e.outcome === "rejected" && e.detail?.reason === "member-offline"));
+    const webhookEvent = events.find((e) =>
+      e.actor === `pat:test-owner/${auth.pat.name}`
+      && e.outcome === "accepted"
+      && e.detail?.source === "deploy-notify");
+    assert.ok(webhookEvent);
+    assert.equal(webhookEvent.detail.body, undefined, "webhook 正文不得进入审计");
+    assert.match(webhookEvent.detail.bodySha256, /^[a-f0-9]{64}$/);
+    assert.ok(events.some((e) => e.actor === `pat:test-owner/${auth.pat.name}` && e.target === "smoke-test" && e.outcome === "rejected" && e.detail?.reason === "member-offline"));
   } finally {
     await new Promise((r) => hub.server.close(r));
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook 规则动作不得越过调用 PAT 的 target 范围", async () => {
+  const stateDir = tmpStateDir();
+  const rulesDir = join(stateDir, "rules");
+  mkdirSync(rulesDir, { recursive: true });
+  writeFileSync(join(rulesDir, "rules.yaml"), "rules:\n  - when: { event: webhook-private }\n    then: { target: secret-target }\n");
+  const hub = await createHub({
+    stateDir: join(stateDir, "hub"),
+    rulesPath: join(rulesDir, "rules.yaml"),
+    port: 0,
+    offlineSweepMs: 60_000,
+    log: { info() {}, error() {} },
+  });
+  const base = `http://127.0.0.1:${hub.server.address().port}`;
+  try {
+    const auth = await bootstrapTestAuth(hub);
+    const role = await hub.identity.createRole(auth.owner, {
+      id: "webhook-limited",
+      name: "Webhook Limited",
+      permissions: ["webhooks.invoke"],
+      targetAllow: ["mac-work/allowed-target"],
+      targetDeny: [],
+    });
+    const user = await hub.identity.createUser(auth.owner, {
+      username: "hook-limited",
+      password: "limited webhook password",
+      roleId: role.id,
+      forcePasswordChange: false,
+    });
+    const login = await hub.identity.login({
+      username: user.username,
+      password: "limited webhook password",
+    });
+    const principal = await hub.identity.authenticateSession(login.token);
+    const issued = await hub.identity.createPat(principal, {
+      name: "limited-hook",
+      scopes: ["webhooks.invoke"],
+      targetAllow: ["mac-work/allowed-target"],
+    });
+    const sent = [];
+    hub.registry.register({
+      agentId: "mac-work",
+      card: CARD({ id: "secret-target", name: "Secret", description: "Secret" }),
+      conn: { readyState: 1, send: (raw) => sent.push(JSON.parse(String(raw))) },
+    });
+
+    const response = await fetch(`${base}/api/webhook/private`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issued.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ secret: "must-not-run" }),
+    });
+    assert.equal(response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(sent.length, 0);
+    assert.equal(hub.queue.list().some((task) => task.target === "secret-target"), false);
+    assert.ok(hub.audit.list().some((event) =>
+      event.target === "secret-target"
+      && event.outcome === "rejected"
+      && event.detail?.reason === "rule-target-scope-denied"));
+  } finally {
+    await new Promise((resolve) => hub.server.close(resolve));
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("webhook 规则续链继承 PAT target 范围，并在 PAT 吊销后 fail-closed", async () => {
+  const stateDir = tmpStateDir();
+  const rulesDir = join(stateDir, "rules");
+  mkdirSync(rulesDir, { recursive: true });
+  writeFileSync(join(rulesDir, "rules.yaml"), `rules:
+  - when: { event: webhook-chain }
+    then: { target: allowed-target }
+  - when: { event: task-terminal, target: allowed-target, state: completed }
+    then: { target: secret-target }
+`);
+  const hub = await createHub({
+    stateDir: join(stateDir, "hub"),
+    rulesPath: join(rulesDir, "rules.yaml"),
+    port: 0,
+    offlineSweepMs: 60_000,
+    log: { info() {}, error() {} },
+  });
+  const port = hub.server.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  configureTestAgentTokens(hub, { "mac-work": "agt_rule_chain_123456" });
+  let ws;
+  try {
+    const auth = await bootstrapTestAuth(hub);
+    const role = await hub.identity.createRole(auth.owner, {
+      id: "webhook-chain-limited",
+      name: "Webhook Chain Limited",
+      permissions: ["webhooks.invoke"],
+      targetAllow: ["mac-work/allowed-target"],
+      targetDeny: [],
+    });
+    const user = await hub.identity.createUser(auth.owner, {
+      username: "hook-chain",
+      password: "limited webhook chain password",
+      roleId: role.id,
+      forcePasswordChange: false,
+    });
+    const login = await hub.identity.login({
+      username: user.username,
+      password: "limited webhook chain password",
+    });
+    const principal = await hub.identity.authenticateSession(login.token);
+    const firstPat = await hub.identity.createPat(principal, {
+      name: "chain-scope",
+      scopes: ["webhooks.invoke"],
+      targetAllow: ["mac-work/allowed-target"],
+    });
+    const secondPat = await hub.identity.createPat(principal, {
+      name: "chain-revoked",
+      scopes: ["webhooks.invoke"],
+      targetAllow: ["mac-work/allowed-target"],
+    });
+
+    const { WebSocket } = await import("ws");
+    ws = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
+      headers: { Authorization: "Bearer agt_rule_chain_123456" },
+    });
+    const received = [];
+    ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+    await once(ws, "open");
+    const card = {
+      ...CARD({ id: "allowed-target", name: "Allowed", description: "Allowed" }),
+      skills: [
+        { id: "allowed-target", name: "Allowed", description: "Allowed", tags: [] },
+        { id: "secret-target", name: "Secret", description: "Secret", tags: [] },
+      ],
+    };
+    ws.send(JSON.stringify({
+      v: 1,
+      kind: "ops",
+      msgId: "e-chain-hello",
+      ts: new Date().toISOString(),
+      body: {
+        type: "agent.hello",
+        contractVersion: "2.0",
+        agentId: "mac-work",
+        card,
+        inFlightTaskIds: [],
+      },
+    }));
+    await waitFor(() => received.some((frame) => frame.body?.type === "agent.hello.ack"));
+
+    const invoke = (token) => fetch(`${base}/api/webhook/chain`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "run" }),
+    });
+    const complete = (taskId, suffix) => ws.send(JSON.stringify({
+      v: 1,
+      kind: "a2a",
+      msgId: `e-chain-${suffix}`,
+      taskId,
+      ts: new Date().toISOString(),
+      body: {
+        jsonrpc: "2.0",
+        method: "message/notification",
+        params: {
+          message: {
+            messageId: `m-chain-${suffix}`,
+            role: "agent",
+            parts: [],
+            contextId: taskId,
+            taskId,
+            kind: "status-update",
+            status: { state: "completed", timestamp: new Date().toISOString() },
+          },
+        },
+      },
+    }));
+
+    assert.equal((await invoke(firstPat.token)).status, 202);
+    await waitFor(() => hub.queue.list().filter((task) => task.target === "allowed-target").length === 1);
+    const firstTask = hub.queue.list().find((task) => task.target === "allowed-target");
+    assert.deepEqual(firstTask.authorization, {
+      kind: "pat",
+      userId: user.id,
+      patId: firstPat.pat.id,
+    });
+    complete(firstTask.id, "scope");
+    await waitFor(() => hub.audit.list().some((event) =>
+      event.target === "secret-target"
+      && event.detail?.reason === "rule-target-scope-denied"));
+
+    assert.equal((await invoke(secondPat.token)).status, 202);
+    await waitFor(() => hub.queue.list().filter((task) => task.target === "allowed-target").length === 2);
+    const secondTask = hub.queue.list().find((task) =>
+      task.target === "allowed-target" && task.id !== firstTask.id);
+    await hub.identity.revokePat(auth.owner, secondPat.pat.id);
+    complete(secondTask.id, "revoked");
+    await waitFor(() => hub.audit.list().some((event) =>
+      event.target === "secret-target"
+      && event.detail?.reason === "rule-authorization-invalid"));
+
+    assert.equal(hub.queue.list().some((task) => task.target === "secret-target"), false);
+    assert.equal(received.some((frame) =>
+      frame.kind === "a2a"
+      && frame.body?.method === "message/send"
+      && hub.queue.get(frame.taskId)?.target === "secret-target"), false);
+
+    const tasksResponse = await fetch(`${base}/api/tasks`, { headers: auth.headers });
+    const publicTasks = (await tasksResponse.json()).tasks;
+    assert.ok(publicTasks.length >= 2);
+    assert.ok(publicTasks.every((task) => !Object.hasOwn(task, "authorization")));
+  } finally {
+    ws?.terminate();
+    await new Promise((resolve) => hub.server.close(resolve));
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
@@ -183,3 +405,19 @@ test("card 扩展字段：x-novoard-notify 随 skill 声明通过 hub 校验（c
   assert.equal(validate.agentCard(card).ok, true);
   assert.equal(card.skills[0]["x-novoard-notify"], "on-failure");
 });
+
+function once(emitter, event) {
+  return new Promise((resolve) => emitter.once(event, resolve));
+}
+
+function waitFor(predicate, timeoutMs = 3_000) {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (predicate()) return resolve();
+      if (Date.now() - startedAt > timeoutMs) return reject(new Error("waitFor 超时"));
+      setTimeout(tick, 20);
+    };
+    tick();
+  });
+}

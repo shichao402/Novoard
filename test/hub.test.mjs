@@ -65,8 +65,13 @@ test("队列：入队、终态不可逆、重启重放", () => {
   const q1 = createTaskQueue({ dir });
   const task = q1.submit({ skillId: "dev-build-investm", target: "dev-build-investm", member: "mac-work", actor: "human", lane: "a2a" });
   assert.match(task.id, /^task-\d{8}-\d{3}$/);
+  assert.throws(() => q1.transition(task.id, "bogus"), (error) => error.code === "invalid-task-state");
+  assert.equal(q1.get(task.id).state, "submitted");
   q1.transition(task.id, "working");
+  assert.throws(() => q1.transition(task.id, "queued-offline"), (error) => error.code === "invalid-task-transition");
   q1.transition(task.id, "completed");
+  assert.equal(q1.transitionChecked(task.id, "completed").changed, false);
+  assert.throws(() => q1.transition(task.id, "failed"), (error) => error.code === "invalid-task-transition");
 
   const q2 = createTaskQueue({ dir }); // 重启重放
   assert.equal(q2.get(task.id).state, "completed");
@@ -144,6 +149,10 @@ test("secrets：本机私密配置、列表字段与环境回退", () => {
   assert.equal(s.has("wecomWebhook"), false);
   s.set({ wecomAllowedChatIds: ["wr-one"] });
   assert.deepEqual(s.get("wecomAllowedChatIds"), ["wr-one"]);
+  s.set({ agentTokenHashes: {}, wecomAllowedUserIds: [], wecomNotifyChatId: "" });
+  assert.deepEqual(s.get("agentTokenHashes"), {}, "显式撤销后不得回退环境变量 token");
+  assert.deepEqual(s.get("wecomAllowedUserIds"), [], "显式空白名单不得回退环境变量");
+  assert.equal(s.get("wecomNotifyChatId"), "", "显式空字符串不得回退环境变量");
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -277,7 +286,7 @@ test("A2A 门：三方法与错误码字面", async () => {
     });
     body = await res.json();
     assert.equal(body.error.code, -32004);
-    assert.match(body.error.message, /no remote capability|expose=local/);
+    assert.match(body.error.message, /target not remotely triggerable/);
 
     // message/stream（M4 已实现）：无 id → TASK_NOT_FOUND（-32001），不再是不支持
     res = await fetch(`http://127.0.0.1:${port}/a2a`, {
@@ -288,8 +297,10 @@ test("A2A 门：三方法与错误码字面", async () => {
     body = await res.json();
     assert.equal(body.error.code, -32001);
 
-    // 聚合 card 公开可读
+    // 聚合 card 必须鉴权，并按调用者 target 范围过滤
     res = await fetch(`http://127.0.0.1:${port}/.well-known/agent-card.json`);
+    assert.equal(res.status, 401);
+    res = await fetch(`http://127.0.0.1:${port}/.well-known/agent-card.json`, { headers });
     const card = await res.json();
     assert.equal(card.skills.length, 1);
     assert.equal(card.skills[0].id, "dev-build-investm");
@@ -361,9 +372,124 @@ test("隧道：hello 注册、上行终态、幂等去重", async () => {
     const auditAfter = hub.audit.list().filter((e) => e.taskId === taskId && e.outcome === "completed").length;
     assert.equal(auditBefore, auditAfter);
 
-    ws.close();
+    // 新 msgId 的相同终态只 ACK，不重复审计；冲突终态 fail-closed，且不产生错误终态副作用
+    ws.send(JSON.stringify({
+      v: 1, kind: "a2a", msgId: "e-101", taskId, ts: new Date().toISOString(),
+      body: { jsonrpc: "2.0", method: "message/notification", params: { message: { messageId: "msg-y", role: "agent", parts: [], contextId: taskId, taskId, kind: "status-update", status: { state: "completed", timestamp: new Date().toISOString() } } } },
+    }));
+    await waitFor(() => received.some((f) => f.kind === "ack" && f.msgId === "e-101"));
+    assert.equal(hub.audit.list().filter((e) => e.taskId === taskId && e.outcome === "completed").length, auditAfter);
+
+    const closed = once(ws, "close");
+    ws.send(JSON.stringify({
+      v: 1, kind: "a2a", msgId: "e-102", taskId, ts: new Date().toISOString(),
+      body: { jsonrpc: "2.0", method: "message/notification", params: { message: { messageId: "msg-z", role: "agent", parts: [], contextId: taskId, taskId, kind: "status-update", status: { state: "failed", timestamp: new Date().toISOString() } } } },
+    }));
+    await closed;
+    assert.equal(hub.queue.get(taskId).state, "completed");
+    assert.equal(hub.audit.list().filter((e) => e.taskId === taskId && e.outcome === "failed").length, 0);
   } finally {
     await close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("隧道：canceled 后冲突 completed 不写终态审计或触发规则", async () => {
+  const stateDir = tmpStateDir();
+  const rulesPath = join(stateDir, "rules.yaml");
+  writeFileSync(rulesPath, `rules:
+  - when: { event: task-terminal, target: dev-build-investm, state: completed }
+    then: { target: downstream-target }
+`);
+  const hub = await createHub({
+    stateDir,
+    port: 0,
+    rulesPath,
+    log: { info() {}, error() {} },
+  });
+  configureTestAgentTokens(hub, { "mac-work": "agt_terminal_conflict_123456" });
+  const auth = await bootstrapTestAuth(hub);
+  const port = hub.server.address().port;
+  let ws;
+  try {
+    const { WebSocket } = await import("ws");
+    ws = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
+      headers: { Authorization: "Bearer agt_terminal_conflict_123456" },
+    });
+    const received = [];
+    ws.on("message", (raw) => received.push(JSON.parse(String(raw))));
+    await once(ws, "open");
+    ws.send(JSON.stringify({
+      v: 1,
+      kind: "ops",
+      msgId: "e-conflict-hello",
+      ts: new Date().toISOString(),
+      body: {
+        ...HELLO_BODY,
+        card: {
+          ...CARD,
+          skills: [
+            ...CARD.skills,
+            { id: "downstream-target", name: "下游", description: "不应触发", tags: [] },
+          ],
+        },
+      },
+    }));
+    await waitFor(() => received.some((frame) => frame.body?.type === "agent.hello.ack"));
+
+    let response = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
+      method: "POST",
+      headers: auth.headers,
+      body: JSON.stringify({ target: "dev-build-investm" }),
+    });
+    const { taskId } = await response.json();
+    await waitFor(() => hub.queue.get(taskId)?.state === "working");
+
+    response = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers: auth.headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "cancel-conflict",
+        method: "tasks/cancel",
+        params: { id: taskId },
+      }),
+    });
+    assert.equal((await response.json()).result.status.state, "canceled");
+
+    const closed = once(ws, "close");
+    ws.send(JSON.stringify({
+      v: 1,
+      kind: "a2a",
+      msgId: "e-conflict-completed",
+      taskId,
+      ts: new Date().toISOString(),
+      body: {
+        jsonrpc: "2.0",
+        method: "message/notification",
+        params: {
+          message: {
+            messageId: "m-conflict-completed",
+            role: "agent",
+            parts: [],
+            contextId: taskId,
+            taskId,
+            kind: "status-update",
+            status: { state: "completed", timestamp: new Date().toISOString() },
+          },
+        },
+      },
+    }));
+    await closed;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.equal(hub.queue.get(taskId).state, "canceled");
+    assert.equal(hub.audit.list().some((event) =>
+      event.taskId === taskId && event.outcome === "completed"), false);
+    assert.equal(hub.queue.list().some((task) => task.target === "downstream-target"), false);
+  } finally {
+    ws?.terminate();
+    await new Promise((resolve) => hub.server.close(resolve));
     rmSync(stateDir, { recursive: true, force: true });
   }
 });

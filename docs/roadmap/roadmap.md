@@ -111,6 +111,7 @@ M7 拆仓后运行期清理与验收面收口，一轮完成四件事：
 - [x] 企微通道收口：允许用户/会话双白名单默认拒绝，真实 sender/chat/command 写审计；不可登录服务账号使用最小权限 PAT，并支持“验证新令牌 → 切换 → 吊销旧令牌”的轮换。
 - [x] Hub 管理控制台：React 19 + TypeScript + Ant Design 6 / ProComponents 3 + Vite 7 + React Router 7 + TanStack Query；初始化、登录、概览、业务操作、用户、角色、PAT 与企微页面按路由拆包，由原生 Node Hub 在根路径静态托管。
 - [x] 门禁：Hub 77 项 Node 测试、前端 8 项组件测试、1 条 Playwright 首装闭环、Agent 40 项测试、前端依赖审计和 Docker 镜像构建统一纳入 CI。
+- [x] v0.3.2 安全收口：webhook 规则全链继承并动态重验调用 PAT 的 target 边界；任务状态与转换在写盘及终态副作用前校验，始终按持久化 member 下发；环境变量凭据可用空值墓碑真正撤销；审批 reject/TTL 下发 cancel，Agent 重连会同时上报待确认帧与 runtime 挂起任务以补发取消；聚合 card、状态计数与审计按 target 隔离，无权/不存在 target 的外部响应一致；setup/login 强制可信 Origin + JSON，显式空 PAT scope 拒绝。Hub 后端回归增至 85 项，Agent 增至 41 项。
 
 ## 里程碑之外（暂不排期）
 

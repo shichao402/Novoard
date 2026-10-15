@@ -55,7 +55,7 @@ NOVOARD_PORT=38666 npm start
 
 首次本地启动前先执行 `npm run build:web`。空 `.state` 访问 `/` 会进入公开 first-claim 初始化向导；创建首位超级管理员后入口永久关闭。生产地址固定为 `https://novoard.firoyang.com/`。
 
-目录约定：`.state/`（hub 运行态，不进 git）下含 `install.json`、`identity.json`、`sessions.json`、`secrets.json`、`audit/`、`queue/`、`artifacts/`。端点：`/`（管理控制台）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（会话/PAT 快捷操作门）。
+目录约定：`.state/`（hub 运行态，不进 git）下含 `install.json`、`identity.json`、`sessions.json`、`secrets.json`、`audit/`、`queue/`、`artifacts/`。端点：`/`（管理控制台）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`（会话/PAT 鉴权并按 target 范围过滤）、`/api/trigger`（会话/PAT 快捷操作门）。
 
 Agent（面板/runner/编辑器/接入向导）已拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)：Windows/macOS 通过桌面托盘轻壳承载同一 SEA sidecar，Linux 分发无头 SEA zip；契约 SSOT 仍以本仓 `docs/architecture/schemas/` 为准。契约 2.0 要求每个 Agent token 唯一绑定 `agentId`，artifact 带 taskId 与 sha256 digest；各成员使用 2.x Release 接入。
 

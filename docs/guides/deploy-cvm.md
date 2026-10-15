@@ -61,6 +61,8 @@ curl -fsS https://novoard.firoyang.com/api/setup/status
 3. 在“个人访问令牌”页为快捷指令、AI 客户端等分别创建具名 PAT；按最小 scope 与 target allow/deny 配置。`nvp_…` 明文同样只显示一次。
 4. 不得把用户 PAT 当 Agent token，也不得让机器客户端共用超级管理员会话。
 
+Compose 环境变量只作为字段尚未写入 `secrets.json` 时的初始回退值。管理面撤销 Agent token、清空企微白名单或通知目标后会写入空值墓碑，不会重新启用仍留在环境变量中的旧值；若要再次使用环境值，需在停机维护时同时清理对应落盘字段并审计该操作。
+
 ## 6. 企微
 
 超级管理员在“企微”页配置 bot 凭据、固定通知会话、允许的用户和群聊。白名单默认为空，空列表拒绝所有 run/approve；群聊同时要求 sender 与 chat 命中。
@@ -81,11 +83,12 @@ docker compose exec -it novoard-hub node src/admin.mjs recover <username>
 ## 8. 验证与备份
 
 ```bash
-curl -fsS https://novoard.firoyang.com/.well-known/agent-card.json
+curl -fsS -H "Authorization: Bearer $NOVOARD_PAT" \
+  https://novoard.firoyang.com/.well-known/agent-card.json
 docker compose logs --tail=100 novoard-hub
 ```
 
-再从控制台完成一次 target 触发、任务终态、artifact 下载和审计查询。备份时停止容器并整体备份 `deploy/.state`；恢复必须使用同版本镜像与完整目录，不能只恢复 identity 或 install 单文件。
+聚合 Agent Card 需要具备 `targets.read` 的会话或 PAT，并只返回其 target 范围内的能力。再从控制台完成一次 target 触发、任务终态、artifact 下载和审计查询。备份时停止容器并整体备份 `deploy/.state`；恢复必须使用同版本镜像与完整目录，不能只恢复 identity 或 install 单文件。
 
 ```bash
 docker compose down
