@@ -110,6 +110,37 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
       return;
     }
 
+    // 审批门（M4 AC2）：approve/reject <taskId> → tasks/approve 端点（与面板/磁贴同一状态机，零旁路）
+    const approval = text.match(/^(approve|reject)\s+(task-[a-z0-9-]+)$/i);
+    if (approval) {
+      const [, decision, taskId] = approval;
+      let res;
+      try {
+        res = await fetchImpl(`http://127.0.0.1:${localPort}/a2a`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${secrets.get("clientKeys")?.[0] ?? ""}` },
+          body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tasks/approve", params: { id: taskId, decision } }),
+        });
+      } catch (error) {
+        await safeReply(frame, `**⚠️ Novoard 审批失败**\n> 转发异常：${error.message}`);
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 200 && !data.error) {
+        const state = data.result?.status?.state ?? "working";
+        const icon = decision === "approve" ? "✅" : "🚫";
+        const word = decision === "approve" ? "已批准，任务恢复执行" : "已拒绝，任务取消";
+        await safeReply(frame, `**${icon} Novoard 审批回执**\n> 任务：\`${taskId}\`\n> ${word}（当前状态：\`${state}\`）`);
+      } else if (data.error?.code === -32001) {
+        await safeReply(frame, `**❌ Novoard 拒绝**\n> 任务 \`${taskId}\` 不存在`);
+      } else if (data.error?.code === -32000) {
+        await safeReply(frame, `**❌ Novoard 拒绝**\n> 任务 \`${taskId}\` 状态非待审批（已处理或已过期）`);
+      } else {
+        await safeReply(frame, `**⚠️ Novoard 审批异常**\n> HTTP ${res.status}：${data.error?.message ?? "unknown"}`);
+      }
+      return;
+    }
+
     // 帮助面：拉聚合 card 列出在线可触发能力
     let skills = "";
     try {
@@ -118,7 +149,7 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
     } catch {
       skills = "> （能力清单暂不可用）";
     }
-    await safeReply(frame, `**Novoard bot 用法**\n> 触发语法：\`run <target>[@<成员>]\`\n> 示例：\`run dev-build-investm@mac-work\`\n\n**当前可触发**\n${skills}`);
+    await safeReply(frame, `**Novoard bot 用法**\n> 触发语法：\`run <target>[@<成员>]\`\n> 审批语法：\`approve <任务ID>\` / \`reject <任务ID>\`（待审批任务会主动推送到本会话）\n> 示例：\`run dev-build-investm-work@mac-work\`\n\n**当前可触发**\n${skills}`);
   }
 
   async function safeReply(frame, content) {

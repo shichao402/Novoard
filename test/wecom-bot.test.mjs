@@ -195,3 +195,47 @@ test("帮助面：非 run 语句回复用法 + 在线能力清单", async () => 
   assert.match(help.body.markdown.content, /run <target>/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("审批门（AC2）：approve/reject 转发 tasks/approve + 结果分流", async () => {
+  const dir = tmpDir();
+  const secrets = createSecrets({ dir, env: {} });
+  secrets.set({ wecomBotId: "aibk0test000000006", wecomBotSecret: "sec-123456", clientKeys: ["ck-ac2-0000000000000000000000000001"] });
+  const { mod, calls } = fakeSdk();
+  const approveCalls = [];
+  const responses = [
+    { status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: { status: { state: "working" } } }) },
+    { status: 200, json: async () => ({ jsonrpc: "2.0", id: 2, result: { status: { state: "canceled" } } }) },
+    { status: 200, json: async () => ({ jsonrpc: "2.0", id: 3, error: { code: -32001, message: "task not found" } }) },
+    { status: 200, json: async () => ({ jsonrpc: "2.0", id: 4, error: { code: -32000, message: "state is working" } }) },
+  ];
+  let i = 0;
+  const bot = createWecomBot({
+    secrets,
+    log: quietLog,
+    sdkFactory: async () => mod,
+    fetchImpl: async (url, init) => {
+      approveCalls.push({ url, init });
+      return responses[i++];
+    },
+  });
+  await bot.start();
+  bot.attach(38666);
+
+  const mkFrame = (text) => ({ body: { chattype: "single", from: { userid: "U1" }, text: { content: text } } });
+  await bot._receiveTestText(mkFrame("approve task-20261015-010"));
+  assert.equal(approveCalls[0].url, "http://127.0.0.1:38666/a2a");
+  assert.equal(approveCalls[0].init.headers.Authorization, "Bearer ck-ac2-0000000000000000000000000001");
+  assert.equal(JSON.parse(approveCalls[0].init.body).params.decision, "approve");
+  assert.match(calls.replies[0].body.markdown.content, /已批准，任务恢复执行/);
+
+  await bot._receiveTestText(mkFrame("reject task-20261015-010"));
+  assert.equal(JSON.parse(approveCalls[1].init.body).params.decision, "reject");
+  assert.match(calls.replies[1].body.markdown.content, /已拒绝，任务取消/);
+
+  await bot._receiveTestText(mkFrame("approve task-999"));
+  assert.match(calls.replies[2].body.markdown.content, /不存在/);
+
+  await bot._receiveTestText(mkFrame("reject task-20261015-011"));
+  assert.match(calls.replies[3].body.markdown.content, /状态非待审批/);
+  rmSync(dir, { recursive: true, force: true });
+});
