@@ -11,30 +11,54 @@ import { createAuditLog } from "./audit.mjs";
 import { createTaskQueue } from "./queue.mjs";
 import { createRegistry } from "./registry.mjs";
 import { createSecrets } from "./secrets.mjs";
+import { createIdentityStore } from "./identity.mjs";
+import { createAuth } from "./auth.mjs";
 import { createArtifacts } from "./artifacts.mjs";
 import { createNotify } from "./notify.mjs";
 import { createWecomBot } from "./wecom-bot.mjs";
 import { createRules } from "./rules.mjs";
-import { createAcl } from "./acl.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
 
-export async function createHub({ stateDir = join(process.cwd(), ".state"), port = Number(process.env.NOVOARD_PORT ?? 38666), host = process.env.NOVOARD_HOST ?? "0.0.0.0", rulesPath = process.env.NOVOARD_RULES, aclPath, offlineSweepMs = 30_000, log = console } = {}) {
+export async function createHub({
+  stateDir = join(process.cwd(), ".state"),
+  port = Number(process.env.NOVOARD_PORT ?? 38666),
+  host = process.env.NOVOARD_HOST ?? "0.0.0.0",
+  rulesPath = process.env.NOVOARD_RULES,
+  webDir = process.env.NOVOARD_WEB_DIR ?? join(process.cwd(), "web", "dist"),
+  offlineSweepMs = 30_000,
+  publicOrigin = process.env.NOVOARD_PUBLIC_ORIGIN ?? "https://novoard.firoyang.com",
+  secureCookies = process.env.NOVOARD_SECURE_COOKIES !== "0",
+  log = console,
+} = {}) {
   mkdirSync(stateDir, { recursive: true });
   const auditDir = join(stateDir, "audit");
   const queueDir = join(stateDir, "queue");
   const artifactsDir = join(stateDir, "artifacts");
 
   const validate = createFrameValidator();
+  const identity = await createIdentityStore({ stateDir });
+  const auth = createAuth({ identity, publicOrigin, secureCookies });
   const secrets = createSecrets({ dir: stateDir });
   const audit = createAuditLog({ dir: auditDir });
   const queue = createTaskQueue({ dir: queueDir });
   const registry = createRegistry({ validate, log });
   const artifacts = createArtifacts({ dir: artifactsDir });
-  const wecomBot = createWecomBot({ secrets, log });
+  const wecomBot = createWecomBot({
+    secrets,
+    log,
+    auditCommand({ senderUserId, chatId, chatType, command, authorized, reason }) {
+      audit.append({
+        actor: `wecom:${senderUserId || "unknown"}`,
+        lane: "ops",
+        target: "wecom",
+        outcome: authorized ? "accepted" : "rejected",
+        detail: { reason, senderUserId, chatId, chatType, command },
+      }, validate.auditEvent);
+    },
+  });
   const notify = createNotify({ secrets, bot: wecomBot, log });
   const rules = createRules({ rulesPath, log });
-  const acl = createAcl({ aclPath: aclPath ?? join(stateDir, "acl.yaml"), log });
 
   let tunnelDelegate = async () => ({ ok: false, reason: "tunnel not ready" });
   const delegate = (args) => tunnelDelegate(args);
@@ -124,8 +148,8 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
   }
 
   /** 外部事件入口（F4）：webhook 落流水 + 规则消费 + 通知面（member-event 类同理给面板）。 */
-  const ingestWebhook = async ({ source, body }) => {
-    audit.append({ actor: `webhook:${source}`, lane: "a2a", target: "-", outcome: "accepted", detail: { reason: `外部事件：${source}`, body: body ?? {} } }, validate.auditEvent);
+  const ingestWebhook = async ({ source, body, actor = `webhook:${source}` }) => {
+    audit.append({ actor, lane: "a2a", target: "-", outcome: "accepted", detail: { reason: `外部事件：${source}`, source, body: body ?? {} } }, validate.auditEvent);
     await notifyAndRules({ event: { kind: "webhook", source, body } });
   };
 
@@ -136,18 +160,21 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     queue,
     audit,
     secrets,
+    identity,
+    auth,
     artifacts,
     validate,
     delegate,
     resumeTask,
-    acl,
     notify: notifyAndRules,
     ingestWebhook,
+    wecomBot,
+    webDir,
     log,
   });
 
   const httpServer = await serverPromise;
-  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, secrets, validate, notify: notifyAndRules, log });
+  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, secrets, artifacts, validate, notify: notifyAndRules, log });
   tunnelDelegate = tunnel.delegate;
 
   // 成员上线钩子：tunnel hello 注册成功后补下发该成员的 queued-offline 任务
@@ -160,6 +187,14 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     sweepApprovalGate();
   }, offlineSweepMs);
   sweepTimer.unref?.();
+  const identitySweepTimer = setInterval(() => {
+    identity.pruneExpiredSessions().catch((error) => log.error?.(`[identity] 会话清理失败：${error.message}`));
+  }, 60_000);
+  identitySweepTimer.unref?.();
+  httpServer.once("close", () => {
+    clearInterval(sweepTimer);
+    clearInterval(identitySweepTimer);
+  });
 
   // 启动时扫尾：重启前留下的 queued-offline 任务，owner 在线则立即补下发，到期则转 failed
   for (const task of queue.pendingOffline()) {
@@ -182,6 +217,8 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     queue,
     audit,
     secrets,
+    identity,
+    auth,
     artifacts,
     validate,
     notify: notifyAndRules,
@@ -191,7 +228,6 @@ export async function createHub({ stateDir = join(process.cwd(), ".state"), port
     ingestWebhook,
     policyOf,
     resumeTask,
-    acl,
   };
 }
 

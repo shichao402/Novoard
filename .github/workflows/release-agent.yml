@@ -1,4 +1,4 @@
-name: release-agent
+name: release-hub
 
 on:
   push:
@@ -17,9 +17,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
       - run: npm ci
-      - run: npm test
-      - name: Contract copy gate
-        run: node scripts/check-contract-copy.mjs
+      - run: npm ci --prefix web
+      - run: npm --prefix web exec -- playwright install --with-deps chromium
+      - run: npm run test:all
+      - run: docker build -f deploy/Dockerfile .
       - name: Note
-        run: echo 'hub repo release - contract gate only; agent binaries live in novoard-agent repo'
+        run: echo 'hub release gates passed; agent binaries are released from novoard-agent'

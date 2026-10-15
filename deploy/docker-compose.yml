@@ -1,7 +1,7 @@
 # Novoard hub 单机部署（CVM 43.138.156.146，腾讯云公有云广州，TencentOS 4）
-# nginx 不进 compose：hub 端口仅绑 127.0.0.1，由宿主机 nginx 子目录反代（见 deploy/nginx-novoard.conf）
+# nginx 不进 compose：hub 端口仅绑 127.0.0.1，由宿主机 nginx 根路径反代。
 services:
-  novoord-hub:
+  novoard-hub:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -13,3 +13,6 @@ services:
       - ./.state:/app/.state
     environment:
       NOVOARD_RULES: /app/.state/rules.yaml   # 规则文件放运行态目录，热装载无需重打镜像
+      NOVOARD_PUBLIC_ORIGIN: https://novoard.firoyang.com
+      NOVOARD_TRUST_PROXY: "1"                 # 端口仅绑宿主机回环，信任本机 nginx 的 X-Real-IP
+      NOVOARD_WEB_DIR: /app/web/dist

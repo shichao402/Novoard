@@ -1,17 +1,17 @@
 /**
- * M2 Web 面板 v1（PRD-2 F3）测试：
+ * Ant Design Pro 管理控制台静态托管与既有业务端点测试：
  * 1. /api/targets 端点：分组目录、离线成员可见、鉴权
- * 2. dashboard 页面直出（HTML 骨架与关键区块存在）
+ * 2. SPA fallback、缓存与 CSP
  * 3. 触发入口 member 选择路由正确（离线 + queue 策略走 queued-offline）
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createHub } from "../src/main.mjs";
-import { renderDashboard } from "../src/dashboard.mjs";
+import { bootstrapTestAuth } from "./test-auth.mjs";
 
 function tmpStateDir() {
   return mkdtempSync(join(tmpdir(), "novoard-dash-"));
@@ -31,29 +31,55 @@ const CARD = {
 
 async function bootHub() {
   const stateDir = tmpStateDir();
-  const hub = await createHub({ stateDir, port: 0, offlineSweepMs: 60_000 });
+  const webDir = mkdtempSync(join(tmpdir(), "novoard-web-dist-"));
+  const assetsDir = join(webDir, "assets");
+  mkdirSync(assetsDir);
+  writeFileSync(join(webDir, "index.html"), "<!doctype html><html><body><div id=\"root\">Novoard SPA</div><script type=\"module\" src=\"/assets/index-DxTQRTPh.js\"></script></body></html>");
+  writeFileSync(join(assetsDir, "index-DxTQRTPh.js"), "globalThis.__NOVOARD_WEB__=true;");
+  const hub = await createHub({ stateDir, webDir, port: 0, offlineSweepMs: 60_000 });
   const port = hub.server.address?.()?.port;
-  hub.secrets.set({ agentTokens: ["agt_test_token_12345678"], dashboardToken: "dash-pass-123456", clientKeys: ["with-key-abc123"] });
+  const auth = await bootstrapTestAuth(hub);
   return {
     hub,
+    auth,
     port,
     stateDir,
-    close: () => new Promise((resolve) => hub.server.close(resolve)),
+    close: async () => {
+      await new Promise((resolve) => hub.server.close(resolve));
+      rmSync(webDir, { recursive: true, force: true });
+    },
   };
 }
 
-test("dashboard 页面：v1 区块直出", () => {
-  const html = renderDashboard();
-  assert.match(html, /Target 目录/);
-  assert.match(html, /任务历史/);
-  assert.match(html, /datalist/);
-  assert.match(html, /member/);
-  assert.match(html, /queued-offline/);
-  assert.match(html, /Artifacts/);
+test("管理控制台：SPA fallback、内容哈希缓存与 CSP", async () => {
+  const { port, stateDir, close } = await bootHub();
+  try {
+    let response = await fetch(`http://127.0.0.1:${port}/users`, { headers: { Accept: "text/html" } });
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Novoard SPA/);
+    assert.match(response.headers.get("cache-control"), /no-cache/);
+    const csp = response.headers.get("content-security-policy");
+    assert.match(csp, /script-src 'self'/);
+    assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/);
+    assert.match(csp, /style-src 'self' 'unsafe-inline'/);
+    assert.match(csp, /connect-src 'self'/);
+    assert.doesNotMatch(csp, /connect-src[^;]*(?:https?:|wss?:)/);
+
+    response = await fetch(`http://127.0.0.1:${port}/assets/index-DxTQRTPh.js`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("cache-control"), /immutable/);
+
+    response = await fetch(`http://127.0.0.1:${port}/api/not-real`, { headers: { Accept: "text/html" } });
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get("content-type"), /application\/json/);
+  } finally {
+    await close();
+    rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("/api/targets：分组目录与离线成员可见", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD });
     hub.registry.markOffline("mac-work"); // 离线但 card 留表 → 目录仍可见
@@ -61,7 +87,7 @@ test("/api/targets：分组目录与离线成员可见", async () => {
     let res = await fetch(`http://127.0.0.1:${port}/api/targets`);
     assert.equal(res.status, 401); // 无鉴权拒
 
-    res = await fetch(`http://127.0.0.1:${port}/api/targets`, { headers: { Authorization: "Bearer dash-pass-123456" } });
+    res = await fetch(`http://127.0.0.1:${port}/api/targets`, { headers: { Authorization: auth.authorization } });
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.catalog.length, 1);
@@ -77,7 +103,7 @@ test("/api/targets：分组目录与离线成员可见", async () => {
 });
 
 test("触发入口：member 指定 + 离线 queue 策略联动", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD });
     hub.registry.markOffline("mac-work");
@@ -85,7 +111,7 @@ test("触发入口：member 指定 + 离线 queue 策略联动", async () => {
     // 面板触发形态：target + member（离线成员 + queue 策略 → queued-offline）
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer dash-pass-123456" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm", member: "mac-work" }),
     });
     assert.equal(res.status, 202);
@@ -97,7 +123,7 @@ test("触发入口：member 指定 + 离线 queue 策略联动", async () => {
     const task = hub.queue.get(body.taskId);
     assert.ok(task.createdAt);
     assert.ok(task.updatedAt);
-    assert.equal(task.actor, "dashboard");
+    assert.equal(task.actor, "pat:test-owner/" + auth.pat.name);
   } finally {
     await close();
     rmSync(stateDir, { recursive: true, force: true });

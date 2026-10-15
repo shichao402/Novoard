@@ -1,23 +1,47 @@
 /**
- * 运行时凭据（issue-handler 模式）：secrets 文件（.state/secrets.json）优先，环境变量回退。
- * dashboard 写入后即时生效（每次读取都走最新值）；文件权限 0600；令牌不进 git、不进镜像。
- * 字段分两池（契约 §8）：agentTokens 给 agent 隧道；clientKeys 给 A2A 客户端（试点：With 一把）。
+ * 本机私密配置：文件优先、环境变量回退，写入采用临时文件 + rename，权限 0600。
+ * 用户 PAT 只在 identity.json 存哈希；企微消费端是唯一需要保留服务 PAT 明文的本地组件。
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
-import { join, dirname } from "node:path";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { join, dirname, basename } from "node:path";
 
-const STRING_FIELDS = ["dashboardToken", "wecomWebhook", "wecomBotId", "wecomBotSecret", "wecomChatId", "barkUrl", "barkDeviceKey"];
-const LIST_FIELDS = ["clientKeys", "agentTokens"];
+const STRING_FIELDS = [
+  "wecomWebhook",
+  "wecomBotId",
+  "wecomBotSecret",
+  "wecomNotifyChatId",
+  "wecomServicePat",
+  "wecomServicePatId",
+  "barkUrl",
+  "barkDeviceKey",
+];
+const LIST_FIELDS = ["wecomAllowedUserIds", "wecomAllowedChatIds"];
+const MAP_FIELDS = ["agentTokenHashes"];
 const ENV_KEYS = {
-  dashboardToken: "NOVOARD_DASHBOARD_TOKEN",
   wecomWebhook: "NOVOARD_WECOM_WEBHOOK",
   wecomBotId: "NOVOARD_WECOM_BOT_ID",
   wecomBotSecret: "NOVOARD_WECOM_BOT_SECRET",
-  wecomChatId: "NOVOARD_WECOM_CHAT_ID",
+  wecomNotifyChatId: "NOVOARD_WECOM_NOTIFY_CHAT_ID",
+  wecomServicePat: "NOVOARD_WECOM_SERVICE_PAT",
+  wecomServicePatId: "NOVOARD_WECOM_SERVICE_PAT_ID",
+  wecomAllowedUserIds: "NOVOARD_WECOM_ALLOWED_USER_IDS",
+  wecomAllowedChatIds: "NOVOARD_WECOM_ALLOWED_CHAT_IDS",
   barkUrl: "NOVOARD_BARK_URL",
   barkDeviceKey: "NOVOARD_BARK_DEVICE_KEY",
-  clientKeys: "NOVOARD_CLIENT_KEYS",
-  agentTokens: "NOVOARD_AGENT_TOKENS",
+  agentTokenHashes: "NOVOARD_AGENT_TOKEN_HASHES",
 };
 
 export function createSecrets({ dir, env = process.env } = {}) {
@@ -27,9 +51,13 @@ export function createSecrets({ dir, env = process.env } = {}) {
   function loadFile() {
     if (!existsSync(file)) return {};
     try {
-      return JSON.parse(readFileSync(file, "utf8")) ?? {};
-    } catch {
-      return {};
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("根节点必须是对象");
+      }
+      return parsed;
+    } catch (error) {
+      throw new Error(`secrets.json 损坏，已 fail-closed：${error.message}`);
     }
   }
 
@@ -48,12 +76,42 @@ export function createSecrets({ dir, env = process.env } = {}) {
     return LIST_FIELDS.includes(field);
   }
 
+  function isMap(field) {
+    return MAP_FIELDS.includes(field);
+  }
+
+  function toAgentTokenHashes(value) {
+    let parsed = value;
+    if (typeof value === "string" && value.trim()) {
+      try {
+        parsed = JSON.parse(value);
+      } catch (error) {
+        throw new Error(`agentTokenHashes 必须是 JSON 对象：${error.message}`);
+      }
+    }
+    if (parsed === undefined || parsed === null || parsed === "") return {};
+    if (typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agentTokenHashes 必须是对象");
+    const out = {};
+    for (const [agentId, hash] of Object.entries(parsed)) {
+      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(agentId) || !/^[a-f0-9]{64}$/.test(String(hash))) {
+        throw new Error(`agentTokenHashes 包含非法条目：${agentId}`);
+      }
+      out[agentId] = String(hash);
+    }
+    return out;
+  }
+
   return {
     get(field) {
-      if (!STRING_FIELDS.includes(field) && !LIST_FIELDS.includes(field)) {
+      if (!STRING_FIELDS.includes(field) && !LIST_FIELDS.includes(field) && !MAP_FIELDS.includes(field)) {
         throw new Error(`未知凭据字段：${field}`);
       }
       const fromFile = loadFile()[field];
+      if (isMap(field)) {
+        const map = toAgentTokenHashes(fromFile);
+        if (Object.keys(map).length) return map;
+        return toAgentTokenHashes(env[ENV_KEYS[field]]);
+      }
       if (isList(field)) {
         const list = toList(fromFile);
         if (list.length) return list;
@@ -66,10 +124,14 @@ export function createSecrets({ dir, env = process.env } = {}) {
     set(values) {
       const data = loadFile();
       for (const [key, value] of Object.entries(values ?? {})) {
-        if (!STRING_FIELDS.includes(key) && !LIST_FIELDS.includes(key)) {
+        if (!STRING_FIELDS.includes(key) && !LIST_FIELDS.includes(key) && !MAP_FIELDS.includes(key)) {
           throw new Error(`未知凭据字段：${key}`);
         }
-        if (isList(key)) {
+        if (isMap(key)) {
+          const map = toAgentTokenHashes(value);
+          if (Object.keys(map).length) data[key] = map;
+          else delete data[key];
+        } else if (isList(key)) {
           const list = toList(value);
           if (list.length) data[key] = list;
           else delete data[key];
@@ -80,25 +142,41 @@ export function createSecrets({ dir, env = process.env } = {}) {
         }
       }
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify(data, null, 2));
+      const temp = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+      let descriptor;
       try {
+        descriptor = openSync(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+        writeFileSync(descriptor, `${JSON.stringify(data, null, 2)}\n`);
+        fsyncSync(descriptor);
+        closeSync(descriptor);
+        descriptor = undefined;
+        renameSync(temp, file);
         chmodSync(file, 0o600);
-      } catch {
-        // 部分文件系统不支持 chmod，忽略
+        const directory = openSync(dirname(file), fsConstants.O_RDONLY);
+        try {
+          fsyncSync(directory);
+        } finally {
+          closeSync(directory);
+        }
+      } finally {
+        if (descriptor !== undefined) closeSync(descriptor);
+        rmSync(temp, { force: true });
       }
     },
     has(field) {
       const value = this.get(field);
-      return Array.isArray(value) ? value.length > 0 : !!value;
+      return Array.isArray(value) ? value.length > 0 : typeof value === "object" ? Object.keys(value).length > 0 : !!value;
     },
     /** 脱敏视图（dashboard /api/status 用）。 */
     view() {
       const out = {};
-      for (const field of [...STRING_FIELDS, ...LIST_FIELDS]) {
+      for (const field of [...STRING_FIELDS, ...LIST_FIELDS, ...MAP_FIELDS]) {
         const value = this.get(field);
         out[field] = Array.isArray(value)
           ? { configured: value.length > 0, count: value.length }
-          : { configured: !!value };
+          : typeof value === "object"
+            ? { configured: Object.keys(value).length > 0, count: Object.keys(value).length }
+            : { configured: !!value };
       }
       return out;
     },

@@ -6,13 +6,13 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 
 import { createHub } from "../src/main.mjs";
-import { createAcl } from "../src/acl.mjs";
+import { bootstrapTestAuth, configureTestAgentTokens } from "./test-auth.mjs";
 
 function tmpDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m4-"));
@@ -29,10 +29,10 @@ const CARD = (skillOverrides = {}) => ({
 });
 
 /** 读 SSE 流直到 final 帧或超时。 */
-async function sseUntilFinal(port, taskId, timeoutMs = 8000) {
+async function sseUntilFinal(port, taskId, headers, timeoutMs = 8000) {
   const res = await fetch(`http://127.0.0.1:${port}/a2a`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+    headers,
     body: JSON.stringify({ jsonrpc: "2.0", id: `sse-${taskId}`, method: "message/stream", params: { id: taskId } }),
   });
   assert.equal(res.status, 200);
@@ -76,7 +76,7 @@ function fakeAgent({ port, token, card, driver }) {
     ws.send(JSON.stringify(env));
   };
   ws.on("open", () => {
-    ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-hello`, ts: new Date().toISOString(), body: { type: "agent.hello", contractVersion: "1.0", agentId: "mac-work", token, card, inFlightTaskIds: [] } }));
+    ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: `e-hello`, ts: new Date().toISOString(), body: { type: "agent.hello", contractVersion: "2.0", agentId: "mac-work", card, inFlightTaskIds: [] } }));
   });
   ws.on("message", (raw) => {
     const env = JSON.parse(String(raw));
@@ -89,7 +89,8 @@ test("F2 message/stream：SSE 步骤进度 + final 终态帧", async () => {
   const dir = tmpDir();
   const hub = await createHub({ stateDir: dir, port: 0 });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_test_token_12345678"] });
+  configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
+  const auth = await bootstrapTestAuth(hub);
   let uplinkFn = null;
   const agent = fakeAgent({
     port, token: "agt_test_token_12345678", card: CARD(),
@@ -108,13 +109,13 @@ test("F2 message/stream：SSE 步骤进度 + final 终态帧", async () => {
     // 触发任务
     const sendRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test" }] } } }),
     });
     const { result: task } = await sendRes.json();
     assert.equal(task.status.state, "submitted");
 
-    const frames = await sseUntilFinal(port, task.id);
+    const frames = await sseUntilFinal(port, task.id, auth.headers);
     const kinds = frames.map((f) => f.result?.status?.state ?? "?");
     assert.ok(kinds.includes("working"), `应含 working 进度帧：${kinds}`);
     assert.ok(frames.some((f) => f.result?.status?.message?.includes("step")), `应含步骤进度 message：${JSON.stringify(frames.map((f) => f.result?.status?.message))}`);
@@ -131,7 +132,8 @@ test("F3 审批门：input-required 挂起 → tasks/approve → resume → comp
   const dir = tmpDir();
   const hub = await createHub({ stateDir: dir, port: 0 });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_test_token_12345678"] });
+  configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
+  const auth = await bootstrapTestAuth(hub);
   const agent = fakeAgent({
     port, token: "agt_test_token_12345678", card: CARD(),
     driver: ({ env, uplink }) => {
@@ -149,7 +151,7 @@ test("F3 审批门：input-required 挂起 → tasks/approve → resume → comp
     await new Promise((r) => setTimeout(r, 300));
     const sendRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test" }] } } }),
     });
     const { result: task } = await sendRes.json();
@@ -159,7 +161,7 @@ test("F3 审批门：input-required 挂起 → tasks/approve → resume → comp
     // 恢复：tasks/approve → hub 下行 message/resume → agent 继续执行
     const approveRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tasks/approve", params: { id: task.id, decision: "approve" } }),
     });
     const approveBody = await approveRes.json();
@@ -167,7 +169,7 @@ test("F3 审批门：input-required 挂起 → tasks/approve → resume → comp
     await new Promise((r) => setTimeout(r, 250));
     assert.equal(hub.queue.get(task.id).state, "completed");
     const events = hub.audit.list();
-    assert.ok(events.some((e) => e.taskId === task.id && e.outcome === "working" && e.detail?.reason === "approval-resumed by client:with-k"));
+    assert.ok(events.some((e) => e.taskId === task.id && e.outcome === "working" && e.detail?.reason === `approval-resumed by pat:test-owner/${auth.pat.name}`));
   } finally {
     agent.close();
     await new Promise((r) => hub.server.close(r));
@@ -179,7 +181,8 @@ test("F3 审批门：tasks/approve reject → canceled", async () => {
   const dir = tmpDir();
   const hub = await createHub({ stateDir: dir, port: 0 });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_test_token_12345678"] });
+  configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
+  const auth = await bootstrapTestAuth(hub);
   const agent = fakeAgent({
     port, token: "agt_test_token_12345678", card: CARD(),
     driver: ({ env, uplink }) => {
@@ -192,14 +195,14 @@ test("F3 审批门：tasks/approve reject → canceled", async () => {
     await new Promise((r) => setTimeout(r, 300));
     const sendRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test" }] } } }),
     });
     const { result: task } = await sendRes.json();
     await new Promise((r) => setTimeout(r, 200));
     const rejectRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tasks/approve", params: { id: task.id, decision: "reject" } }),
     });
     assert.equal(rejectRes.status, 200);
@@ -211,57 +214,103 @@ test("F3 审批门：tasks/approve reject → canceled", async () => {
   }
 });
 
-test("F4 授权矩阵：allow/deny 查表 + 拒绝留审计（AC4）", async () => {
+test("F3 审批门：成员离线时 approve 明确失败且任务保持挂起", async () => {
   const dir = tmpDir();
-  writeFileSync(join(dir, "acl.yaml"), `clients:\n  - client: with-k\n    allow:\n      - mac-home/*\n    deny:\n      - mac-home/danger-target\n`);
-  const hub = await createHub({ stateDir: dir, port: 0, aclPath: join(dir, "acl.yaml") });
+  const hub = await createHub({ stateDir: dir, port: 0, log: { info() {}, error() {} } });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123", "other-key-xyz999"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_test_token_12345678"] });
+  const auth = await bootstrapTestAuth(hub);
   try {
-    hub.registry.register({ agentId: "mac-home", card: { name: "h", description: "d", version: "1", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text", "file"], skills: [{ id: "smoke-test", name: "n", description: "d", tags: [] }, { id: "danger-target", name: "n", description: "d", tags: [] }] } });
-
-    // allow 域内：放行到路由层（成员离线 reject，但非 acl 拒绝）
-    const okRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
+    const task = hub.queue.submit({
+      skillId: "offline-approval",
+      target: "offline-approval",
+      member: "offline-agent",
+      actor: "test",
+      lane: "a2a",
     });
-    const okBody = await okRes.json();
-    assert.ok(okBody.error, "成员离线应返回 error（非 ACL 拒绝）");
-    assert.ok(!okBody.error?.data?.includes("授权矩阵"), `不应是 ACL 拒绝：${JSON.stringify(okBody)}`);
+    hub.queue.transition(task.id, "input-required", { message: "waiting" });
 
-    // deny 条目：拒绝 + 审计
-    const denyRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+    const response = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "message/send", params: { message: { messageId: "m2", role: "user", parts: [{ kind: "text", text: "danger-target@mac-home" }] } } }),
+      headers: auth.headers,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tasks/approve",
+        params: { id: task.id, decision: "approve" },
+      }),
     });
-    const denyBody = await denyRes.json();
-    assert.match(denyBody.error?.message ?? "", /授权矩阵拒绝/);
-    assert.ok(hub.audit.list().some((e) => e.target === "danger-target" && e.outcome === "rejected" && e.detail?.reason?.includes("acl-denied")));
-
-    // 未注册 client：拒绝
-    const unregRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer other-key-xyz999" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "message/send", params: { message: { messageId: "m3", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
-    });
-    const unregBody = await unregRes.json();
-    assert.match(unregBody.error?.message ?? "", /未在授权矩阵注册/);
+    const body = await response.json();
+    assert.equal(body.error.code, -32004);
+    assert.equal(hub.queue.get(task.id).state, "input-required");
+    assert.equal(
+      hub.audit.list().some((event) => event.taskId === task.id && event.outcome === "working"),
+      false,
+    );
   } finally {
-    await new Promise((r) => hub.server.close(r));
+    await new Promise((resolve) => hub.server.close(resolve));
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("F4 授权矩阵单元：未配置默认放行；dashboard 不受限", () => {
-  const acl = createAcl({ aclPath: "/nonexistent/acl.yaml", log: { info() {} } });
-  assert.deepEqual(acl.check({ actor: "client:with-k", skillId: "x", member: "m" }), { allowed: true });
+test("F4 RBAC：角色与 PAT target allow/deny 取交集 + 拒绝留审计", async () => {
   const dir = tmpDir();
-  writeFileSync(join(dir, "acl.yaml"), `clients:\n  - client: with-k\n    allow: [mac-home/*]\n`);
-  const acl2 = createAcl({ aclPath: join(dir, "acl.yaml"), log: { info() {} } });
-  assert.equal(acl2.check({ actor: "dashboard", skillId: "anything", member: "any" }).allowed, true);
-  assert.equal(acl2.check({ actor: "client:with-k", skillId: "smoke-test", member: "mac-home" }).allowed, true);
-  assert.equal(acl2.check({ actor: "client:with-k", skillId: "x", member: "other-member" }).allowed, false);
-  rmSync(dir, { recursive: true, force: true });
+  const hub = await createHub({ stateDir: dir, port: 0 });
+  const port = hub.server.address().port;
+  configureTestAgentTokens(hub, { "mac-work": "agt_test_token_12345678" });
+  const ownerAuth = await bootstrapTestAuth(hub);
+  const role = await hub.identity.createRole(ownerAuth.owner, {
+    id: "mac-home-runner",
+    name: "Mac Home Runner",
+    permissions: ["targets.read", "targets.execute", "tasks.read"],
+    targetAllow: ["mac-home/*"],
+    targetDeny: ["mac-home/danger-target"],
+  });
+  const user = await hub.identity.createUser(ownerAuth.owner, {
+    username: "scoped-user",
+    password: "scoped user password",
+    roleId: role.id,
+    forcePasswordChange: false,
+  });
+  const session = await hub.identity.login({ username: user.username, password: "scoped user password" });
+  const principal = await hub.identity.authenticateSession(session.token);
+  const issued = await hub.identity.createPat(principal, {
+    name: "scoped",
+    scopes: ["targets.read", "targets.execute", "tasks.read"],
+    targetAllow: ["mac-home/smoke-test", "mac-home/danger-target"],
+  });
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issued.token}` };
+  try {
+    hub.registry.register({ agentId: "mac-home", card: { name: "h", description: "d", version: "1.0.0", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text", "file"], skills: [{ id: "smoke-test", name: "n", description: "d", tags: [] }, { id: "danger-target", name: "n", description: "d", tags: [] }] } });
+
+    // allow 域内：放行到路由层（成员离线 reject，但非 acl 拒绝）
+    const okRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "message/send", params: { message: { messageId: "m1", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
+    });
+    const okBody = await okRes.json();
+    assert.ok(okBody.error, "成员离线应返回 error（非 ACL 拒绝）");
+    assert.ok(!String(okBody.error?.message).includes("scope denied"), `不应是 scope 拒绝：${JSON.stringify(okBody)}`);
+
+    // deny 条目：拒绝 + 审计
+    const denyRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "message/send", params: { message: { messageId: "m2", role: "user", parts: [{ kind: "text", text: "danger-target@mac-home" }] } } }),
+    });
+    const denyBody = await denyRes.json();
+    assert.match(denyBody.error?.message ?? "", /target scope denied/);
+    assert.ok(hub.audit.list().some((e) => e.target === "danger-target" && e.outcome === "rejected" && e.detail?.reason === "target-scope-denied"));
+
+    // 未注册 client：拒绝
+    const unregRes = await fetch(`http://127.0.0.1:${port}/a2a`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer nvp_0000000000000000_invalidinvalidinvalidinvalidinvalidinvalid" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "message/send", params: { message: { messageId: "m3", role: "user", parts: [{ kind: "text", text: "smoke-test@mac-home" }] } } }),
+    });
+    assert.equal(unregRes.status, 401);
+  } finally {
+    await new Promise((r) => hub.server.close(r));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

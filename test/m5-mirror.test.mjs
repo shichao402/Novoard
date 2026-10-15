@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 
 import { createHub } from "../src/main.mjs";
+import { configureTestAgentTokens } from "./test-auth.mjs";
 
 function tmpDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m5mirror-"));
@@ -29,7 +30,7 @@ test("本地镜像：task-local-* 终态上行 → hub ack + 镜像审计，不�
   const dir = tmpDir();
   const hub = await createHub({ stateDir: dir, port: 0 });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_m5_mirror_123456"] });
+  configureTestAgentTokens(hub, { "mac-home": "agt_m5_mirror_123456" });
   const ws = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, { headers: { Authorization: "Bearer agt_m5_mirror_123456" } });
   const acked = new Promise((resolve) => {
     ws.on("message", (raw) => {
@@ -45,7 +46,7 @@ test("本地镜像：task-local-* 终态上行 → hub ack + 镜像审计，不�
     });
   });
   ws.on("open", () => {
-    ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: "e-hello", ts: new Date().toISOString(), body: { type: "agent.hello", contractVersion: "1.0", agentId: "mac-home", token: "agt_m5_mirror_123456", card: CARD, inFlightTaskIds: [] } }));
+    ws.send(JSON.stringify({ v: 1, kind: "ops", msgId: "e-hello", ts: new Date().toISOString(), body: { type: "agent.hello", contractVersion: "2.0", agentId: "mac-home", card: CARD, inFlightTaskIds: [] } }));
   });
   try {
     const ack = await Promise.race([acked, new Promise((_, rj) => setTimeout(() => rj(new Error("ack 超时")), 5000))]);

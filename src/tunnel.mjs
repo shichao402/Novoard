@@ -7,13 +7,15 @@
  */
 import { WebSocketServer } from "ws";
 import { newMsgId } from "./registry.mjs";
+import { authenticateAgentToken } from "./agent-auth.mjs";
 
-const CONTRACT_VERSION = "1.0";
+export const CONTRACT_VERSION = "2.0";
 const PING_INTERVAL_MS = 30_000;
 const PING_TIMEOUT_MS = 60_000;
 
-export function attachTunnel({ server, registry, queue, audit, secrets, validate, notify, log = console }) {
+export function attachTunnel({ server, registry, queue, audit, secrets, artifacts, validate, notify, log = console }) {
   const wss = new WebSocketServer({ noServer: true });
+  const authenticatedAgentId = new WeakMap();
   /** 成员上线钩子（M2）：main 装配层赋值 tunnel.onMemberOnline = fn 注入；hello 注册成功后调用。 */
   const callbacks = { onMemberOnline: null };
 
@@ -25,13 +27,14 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
       return;
     }
     const token = bearerOf(req.headers.authorization);
-    const tokens = secrets.get("agentTokens");
-    if (!token || !tokens.includes(token)) {
+    const agentId = token ? authenticateAgentToken(secrets, token) : null;
+    if (!agentId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      authenticatedAgentId.set(ws, agentId);
       wss.emit("connection", ws, req);
     });
   });
@@ -130,6 +133,22 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: "contract-major-mismatch", hubVersion: CONTRACT_VERSION }));
         return;
       }
+      const authenticatedId = authenticatedAgentId.get(ws);
+      if (!authenticatedId || body.agentId !== authenticatedId) {
+        sendEnvelope(ws, opsFrame({
+          type: "agent.hello.nack",
+          reason: "agent-identity-mismatch",
+          hubVersion: CONTRACT_VERSION,
+        }));
+        audit.append({
+          actor: `agent:${authenticatedId ?? "unknown"}`,
+          lane: "ops",
+          target: "hub",
+          outcome: "rejected",
+          detail: { reason: "agent-identity-mismatch", claimedAgentId: body.agentId },
+        }, validate.auditEvent);
+        return;
+      }
       const result = registry.register({ agentId: body.agentId, card: body.card, conn: ws, inFlightTaskIds: body.inFlightTaskIds ?? [] });
       if (!result.ok) {
         sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: result.reason }));
@@ -189,6 +208,11 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
     }
     const message = body?.params?.message ?? {};
     const kind = message.kind;
+    const agentId = boundAgentId.get(ws);
+    if (!agentId) {
+      rejectAgentFrame(ws, envelope, "agent-not-registered");
+      return;
+    }
 
     if (kind === "status-update") {
       const state = message?.status?.state;
@@ -197,8 +221,12 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         // 本地磁贴触发的终态镜像（ADR-0008）：hub 不建 task，但 ack + 落审计（本地闭环的可见性镜像）
         if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId });
         if (state) {
-          audit.append({ actor: `agent:${boundAgentId.get(ws) ?? "?"}`, lane: "a2a", target: "-", taskId, outcome: state, detail: { via: "tile-local-mirror" } }, validate.auditEvent);
+          audit.append({ actor: `agent:${agentId}`, lane: "a2a", target: "-", taskId, outcome: state, detail: { via: "tile-local-mirror" } }, validate.auditEvent);
         }
+        return;
+      }
+      if (task && task.member !== agentId) {
+        rejectAgentFrame(ws, envelope, "task-member-mismatch", task);
         return;
       }
       if (state && task) {
@@ -214,27 +242,66 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
         if (queue.isTerminal(state)) {
           notify?.({ event: { kind: "terminal", taskId, target: task.target, state } });
         }
+        sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
       }
       return;
     }
 
     if (kind === "artifact-update") {
       const task = queue.get(taskId);
-      if (task) {
-        queue.addArtifact(taskId, {
-          name: message.artifact?.name ?? "artifact",
-          parts: message.artifact?.parts ?? [],
-        });
-        audit.append({
-          actor: `agent:${task.member}`,
-          lane: "a2a",
-          target: task.target,
-          taskId,
-          outcome: task.state,
-        }, validate.auditEvent);
+      if (!task) {
+        rejectAgentFrame(ws, envelope, "artifact-task-not-found");
+        return;
       }
+      if (task.member !== agentId) {
+        rejectAgentFrame(ws, envelope, "task-member-mismatch", task);
+        return;
+      }
+      const artifactId = artifactIdFrom(message.artifact);
+      const metadata = artifactId ? artifacts?.metadata(artifactId) : null;
+      if (!metadata || metadata.taskId !== task.id || metadata.member !== task.member || metadata.target !== task.target) {
+        rejectAgentFrame(ws, envelope, "artifact-metadata-mismatch", task);
+        return;
+      }
+      if (!(task.artifacts ?? []).some((artifact) => artifact.metadata?.artifactId === artifactId)) {
+        queue.addArtifact(taskId, {
+          name: metadata.name,
+          parts: [{ kind: "file", uri: `/api/artifacts/${artifactId}` }],
+          metadata: {
+            artifactId,
+            taskId: metadata.taskId,
+            member: metadata.member,
+            target: metadata.target,
+            digest: metadata.digest,
+            size: metadata.size,
+          },
+        });
+      }
+      audit.append({
+        actor: `agent:${task.member}`,
+        lane: "a2a",
+        target: task.target,
+        taskId,
+        outcome: task.state,
+        detail: { reason: "artifact-notified", artifactId },
+      }, validate.auditEvent);
+      sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
       return;
     }
+  }
+
+  function rejectAgentFrame(ws, envelope, reason, task = null) {
+    const agentId = boundAgentId.get(ws) ?? authenticatedAgentId.get(ws) ?? "unknown";
+    audit.append({
+      actor: `agent:${agentId}`,
+      lane: "ops",
+      target: task?.target ?? "hub",
+      ...(task?.id ? { taskId: task.id } : {}),
+      outcome: "rejected",
+      detail: { reason, envelopeTaskId: envelope.taskId, expectedMember: task?.member },
+    }, validate.auditEvent);
+    log.error?.(`拒绝 agent 上行：${reason}（agent=${agentId}, task=${envelope.taskId}）`);
+    try { ws.close(1008, reason); } catch { /* noop */ }
   }
 
   /** 下发钩子（server.mjs delegate）：message/send 委派 或 tasks/cancel，走隧道 a2a 帧。 */
@@ -298,6 +365,16 @@ export function attachTunnel({ server, registry, queue, audit, secrets, validate
 
   function majorOf(version) {
     return String(version).split(".")[0];
+  }
+
+  function artifactIdFrom(artifact) {
+    const fromMetadata = String(artifact?.metadata?.artifactId ?? "");
+    if (/^art_[a-f0-9]{32}$/.test(fromMetadata)) return fromMetadata;
+    for (const part of Array.isArray(artifact?.parts) ? artifact.parts : []) {
+      const match = String(part?.uri ?? "").match(/^\/api\/artifacts\/(art_[a-f0-9]{32})$/);
+      if (match) return match[1];
+    }
+    return "";
   }
 
   return { wss, delegate, set onMemberOnline(fn) { callbacks.onMemberOnline = fn; }, get onMemberOnline() { return callbacks.onMemberOnline; } };

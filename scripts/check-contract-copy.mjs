@@ -51,7 +51,7 @@ if (!existsSync(SSOT_FRAMES)) {
     // good：合法 ops 信封帧（hello）
     const goodHello = {
       v: 1, kind: "ops", msgId: "e-gate-hello-1", ts: new Date().toISOString(),
-      body: { type: "agent.hello", contractVersion: "1.1", agentId: "gate-probe", token: "t".repeat(32), card: { name: "n", description: "d", version: "1.0.0", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text"], skills: [] }, inFlightTaskIds: [] },
+      body: { type: "agent.hello", contractVersion: "2.0", agentId: "gate-probe", card: { name: "n", description: "d", version: "1.0.0", capabilities: { streaming: false, pushNotifications: true }, defaultInputModes: ["text"], defaultOutputModes: ["text"], skills: [] }, inFlightTaskIds: [] },
     };
     if (v.envelope(goodHello).ok !== true) {
       console.error(`✗ 行为样例失败：合法 hello 帧被拒（${v.envelope(goodHello).errors?.join("; ")}）`);

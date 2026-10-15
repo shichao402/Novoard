@@ -21,6 +21,8 @@ import { createSecrets } from "../src/secrets.mjs";
 import { startServer } from "../src/server.mjs";
 import { attachTunnel } from "../src/tunnel.mjs";
 import { createHub } from "../src/main.mjs";
+import { hashAgentToken } from "../src/agent-auth.mjs";
+import { bootstrapTestAuth, configureTestAgentTokens } from "./test-auth.mjs";
 
 function tmpStateDir() {
   return mkdtempSync(join(tmpdir(), "novoard-test-"));
@@ -40,9 +42,8 @@ const CARD = {
 
 const HELLO_BODY = {
   type: "agent.hello",
-  contractVersion: "1.0",
+  contractVersion: "2.0",
   agentId: "mac-work",
-  token: "agt_test_token_12345678",
   card: CARD,
   inFlightTaskIds: [],
 };
@@ -121,36 +122,54 @@ test("审计：落盘、校验、查询", () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("secrets：双池令牌与回退", () => {
+test("secrets：本机私密配置、列表字段与环境回退", () => {
   const dir = tmpStateDir();
-  const s = createSecrets({ dir, env: { NOVOARD_AGENT_TOKENS: "agt_a,agt_b", NOVOARD_DASHBOARD_TOKEN: "pass12345678" } });
-  assert.deepEqual(s.get("agentTokens"), ["agt_a", "agt_b"]);
-  assert.equal(s.get("dashboardToken"), "pass12345678");
+  const s = createSecrets({
+    dir,
+    env: {
+      NOVOARD_AGENT_TOKEN_HASHES: JSON.stringify({
+        "mac-work": hashAgentToken("agt_a"),
+        "mac-home": hashAgentToken("agt_b"),
+      }),
+      NOVOARD_WECOM_ALLOWED_USER_IDS: "U1,U2",
+      NOVOARD_WECOM_NOTIFY_CHAT_ID: "wr-notify",
+    },
+  });
+  assert.deepEqual(s.get("agentTokenHashes"), {
+    "mac-work": hashAgentToken("agt_a"),
+    "mac-home": hashAgentToken("agt_b"),
+  });
+  assert.deepEqual(s.get("wecomAllowedUserIds"), ["U1", "U2"]);
+  assert.equal(s.get("wecomNotifyChatId"), "wr-notify");
   assert.equal(s.has("wecomWebhook"), false);
-  s.set({ clientKeys: ["with-key-1"] });
-  assert.deepEqual(s.get("clientKeys"), ["with-key-1"]);
+  s.set({ wecomAllowedChatIds: ["wr-one"] });
+  assert.deepEqual(s.get("wecomAllowedChatIds"), ["wr-one"]);
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("secrets：agentTokens 映射形态（部署态 agentId→token）归一化为令牌池", () => {
+test("secrets：agentId → tokenHash 映射严格校验", () => {
   const dir = tmpStateDir();
   writeFileSync(join(dir, "secrets.json"), JSON.stringify({
-    agentTokens: { "mac-work": "agt_macwork_token_123456", "mac-home": "agt_machome_token_654321" },
-    dashboardToken: "dash-pass-123456",
+    agentTokenHashes: {
+      "mac-work": hashAgentToken("agt_macwork_token_123456"),
+      "mac-home": hashAgentToken("agt_machome_token_654321"),
+    },
   }));
   const s = createSecrets({ dir, env: {} });
-  assert.deepEqual(s.get("agentTokens"), ["agt_macwork_token_123456", "agt_machome_token_654321"]);
-  assert.equal(s.has("agentTokens"), true);
+  assert.deepEqual(Object.keys(s.get("agentTokenHashes")), ["mac-work", "mac-home"]);
+  assert.equal(s.has("agentTokenHashes"), true);
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function bootHub({ agentTokens = ["agt_test_token_12345678"] } = {}) {
+async function bootHub({ agentTokens = { "mac-work": "agt_test_token_12345678" } } = {}) {
   const stateDir = tmpStateDir();
   const hub = await createHub({ stateDir, port: 0 });
   const port = hub.server.address?.().port;
-  hub.secrets.set({ agentTokens, dashboardToken: "dash-pass-123456", clientKeys: ["with-key-abc123"] });
+  configureTestAgentTokens(hub, agentTokens);
+  const auth = await bootstrapTestAuth(hub);
   return {
     hub,
+    auth,
     port,
     stateDir,
     close: () => new Promise((resolve) => hub.server.close(resolve)),
@@ -158,12 +177,12 @@ async function bootHub({ agentTokens = ["agt_test_token_12345678"] } = {}) {
 }
 
 test("HTTP 门：trigger 受理与离线拒绝分流", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     // 无成员时：no-such-skill → 404
     let res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     assert.equal(res.status, 404);
@@ -173,7 +192,7 @@ test("HTTP 门：trigger 受理与离线拒绝分流", async () => {
     hub.registry.register({ agentId: "mac-work", card: CARD, conn: { readyState: 1, send: () => {} } });
     res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     assert.equal(res.status, 202);
@@ -185,7 +204,7 @@ test("HTTP 门：trigger 受理与离线拒绝分流", async () => {
     hub.registry.markOffline("mac-work");
     res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     assert.equal(res.status, 202);
@@ -197,10 +216,10 @@ test("HTTP 门：trigger 受理与离线拒绝分流", async () => {
 });
 
 test("A2A 门：三方法与错误码字面", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD, conn: { readyState: 1, send: () => {} } });
-    const headers = { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" };
+    const headers = auth.headers;
 
     // message/send → 受理
     let res = await fetch(`http://127.0.0.1:${port}/a2a`, {
@@ -297,7 +316,7 @@ test("A2A 门：无 key → 401", async () => {
 });
 
 test("隧道：hello 注册、上行终态、幂等去重", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     const { WebSocket } = await import("ws");
     const ws = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, { headers: { Authorization: "Bearer agt_test_token_12345678" } });
@@ -313,7 +332,7 @@ test("隧道：hello 注册、上行终态、幂等去重", async () => {
     // 触发任务（HTTP 门）
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     const { taskId } = await res.json();

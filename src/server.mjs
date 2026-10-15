@@ -4,21 +4,27 @@
  *   POST /a2a                           JSON-RPC 2.0：message/send、tasks/get、tasks/cancel
  *   POST /api/trigger                   人类客户端门（iOS 快捷指令 / 企微 bot / Web 面板）
  *   POST /api/artifacts                 artifact 上传（agent token 鉴权，内联上限 5MB）
- *   GET  /api/artifacts/:name           artifact 下载
+ *   GET  /api/artifacts/:artifactId     artifact 下载
  *   GET  /api/status                    联邦状态（Bearer 鉴权）
  *   GET  /api/tasks                     任务列表（Bearer 鉴权）
  *   GET  /api/events                    审计流水（Bearer 鉴权）
- *   POST /api/bootstrap                 首访设口令（仅未设置时）
- *   POST /api/session                   口令校验（dashboard 登录）
+ *   GET/POST /api/setup                 首访初始化
+ *   POST /api/session                   用户名/口令登录
  *   GET  /                              dashboard 页面
  *
- * 鉴权（契约 §8 分池）：agentTokens 给隧道；clientKeys 给 A2A 客户端（试点：With 一把）；
- * dashboardToken 给面板。三者均 Bearer。
+ * 鉴权：浏览器使用 HttpOnly 会话 + CSRF；机器客户端使用具名 PAT；
+ * agent token 只给隧道/artifact 上传。
  */
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
 import { readBody, readJson, sendJson, parseBearer } from "./http-helpers.mjs";
-import { renderDashboard } from "./dashboard.mjs";
+import { createStaticSite } from "./static-site.mjs";
+import {
+  authenticateAgentToken,
+  hashAgentToken,
+  issueAgentToken,
+  normalizeAgentId,
+  revokeAgentToken,
+} from "./agent-auth.mjs";
 
 const JSONRPC_ERRORS = {
   TASK_NOT_FOUND: { code: -32001, message: "Task not found" },
@@ -34,29 +40,45 @@ export function startServer({
   queue,
   audit,
   secrets,
+  identity,
+  auth,
   artifacts,
   validate,
   delegate, // async ({ task, vars, cancel }) => { ok, reason } —— 隧道下发钩子（tunnel.mjs 提供）
   resumeTask, // ({ task, actor }) => boolean —— 审批门恢复钩子（M4 F3：input-required → 继续执行）
-  acl,     // 授权矩阵（M4 F4）：{ check({ actor, skillId, member }) → { allowed, reason } }
   notify,   // async ({ event }) => void —— 通知扇出钩子（通知扇出最小版挂 M1 后段）
   ingestWebhook, // async ({ source, body }) => void —— 外部事件入口（M3 F4：落流水 + 规则消费）
+  wecomBot,
+  webDir,
   log = console,
 }) {
-  const safeEq = (a, b) => {
-    const bufA = Buffer.from(String(a));
-    const bufB = Buffer.from(String(b));
-    return bufA.length === bufB.length && timingSafeEqual(bufA, bufB);
-  };
+  if (!identity || !auth) throw new Error("HTTP server 需要 identity/auth");
+  const staticSite = createStaticSite({ dir: webDir, log });
 
-  function authorizeClient(req) {
-    const token = parseBearer(req.headers.authorization);
-    if (!token) return null;
-    if (safeEq(token, secrets.get("dashboardToken"))) return "dashboard";
-    for (const key of secrets.get("clientKeys")) {
-      if (safeEq(token, key)) return `client:${key.slice(0, 6)}`;
+  async function requirePrincipal(req, res, permission, {
+    session = true,
+    pat = true,
+    mutation = false,
+    allowForcedPasswordChange = false,
+  } = {}) {
+    const authn = await auth.authenticate(req, { session, pat });
+    if (!authn) {
+      sendJson(res, 401, { error: "unauthorized" });
+      return null;
     }
-    return null;
+    if (authn.principal.user.forcePasswordChange && !allowForcedPasswordChange) {
+      sendJson(res, 403, { error: "password_change_required" });
+      return null;
+    }
+    if (mutation && !auth.requireCsrf(req, authn)) {
+      sendJson(res, 403, { error: "csrf_failed" });
+      return null;
+    }
+    if (permission && !identity.hasPermission(authn.principal, permission)) {
+      sendJson(res, 403, { error: "forbidden", permission });
+      return null;
+    }
+    return authn;
   }
 
   function auditLine(partial, actor, lane) {
@@ -67,9 +89,90 @@ export function startServer({
     }
   }
 
+  function actorForRequest(req, principal) {
+    if (principal?.kind !== "pat" || principal?.pat?.kind !== "service"
+      || principal?.user?.accountType !== "service" || principal?.user?.username !== "wecom-bot") {
+      return principal?.actor ?? "anonymous";
+    }
+    const sender = String(req.headers["x-novoard-wecom-sender"] ?? "").trim().slice(0, 128);
+    return sender ? `wecom:${sender}` : principal.actor;
+  }
+
+  const WECOM_SERVICE_SCOPES = Object.freeze([
+    "targets.read",
+    "targets.execute",
+    "tasks.read",
+    "tasks.approve",
+  ]);
+  let wecomRotationActive = false;
+
+  async function wecomConfigView() {
+    const serviceUser = (await identity.listUsers()).find((user) => user.username === "wecom-bot" && user.accountType === "service");
+    return {
+      botId: secrets.get("wecomBotId"),
+      botSecretConfigured: secrets.has("wecomBotSecret"),
+      allowedUserIds: secrets.get("wecomAllowedUserIds"),
+      allowedChatIds: secrets.get("wecomAllowedChatIds"),
+      notifyChatId: secrets.get("wecomNotifyChatId"),
+      servicePatConfigured: secrets.has("wecomServicePat"),
+      servicePatId: secrets.get("wecomServicePatId") || null,
+      serviceAccount: serviceUser ?? null,
+    };
+  }
+
+  async function rotateWecomServicePat(actor) {
+    if (wecomRotationActive) throw identityErrorLike("rotation-in-progress", "企微服务 PAT 正在轮换");
+    wecomRotationActive = true;
+    let issued;
+    try {
+      const serviceUser = await identity.ensureWecomServiceAccount(actor);
+      const previousPatId = secrets.get("wecomServicePatId");
+      const previousPat = secrets.get("wecomServicePat");
+      issued = await identity.createPat(actor, {
+        userId: serviceUser.id,
+        name: `wecom-bot-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}`,
+        kind: "service",
+        scopes: WECOM_SERVICE_SCOPES,
+        targetAllow: ["*"],
+      });
+      const verified = await identity.authenticatePat(issued.token);
+      if (!verified || verified.user.id !== serviceUser.id
+        || WECOM_SERVICE_SCOPES.some((scope) => !verified.permissions.includes(scope))) {
+        throw identityErrorLike("service-pat-verification-failed", "新企微服务 PAT 验证失败");
+      }
+      try {
+        secrets.set({ wecomServicePat: issued.token, wecomServicePatId: issued.pat.id });
+      } catch (error) {
+        await identity.revokePat(actor, issued.pat.id).catch(() => {});
+        throw error;
+      }
+      let previousRevoked = !previousPatId;
+      if (previousPatId && previousPatId !== issued.pat.id) {
+        try {
+          await identity.revokePat(actor, previousPatId);
+          previousRevoked = true;
+        } catch (error) {
+          secrets.set({ wecomServicePat: previousPat, wecomServicePatId: previousPatId });
+          await identity.revokePat(actor, issued.pat.id).catch(() => {});
+          throw error;
+        }
+      }
+      return { pat: issued.pat, serviceAccount: serviceUser, previousPatId: previousPatId || null, previousRevoked };
+    } catch (error) {
+      if (issued && secrets.get("wecomServicePatId") !== issued.pat.id) {
+        await identity.revokePat(actor, issued.pat.id).catch(() => {});
+      }
+      throw error;
+    } finally {
+      wecomRotationActive = false;
+    }
+  }
+
   /** 人类门触发：查表 → 入队 → 202 受理 → 异步下发（fire-and-forget，契约 §5.1）。 */
   async function handleTrigger(req, res) {
-    const actor = authorizeClient(req) ?? "human";
+    const authn = await requirePrincipal(req, res, "targets.execute", { mutation: true });
+    if (!authn) return;
+    const actor = actorForRequest(req, authn.principal);
     let payload;
     try {
       payload = await readJson(req);
@@ -86,6 +189,12 @@ export function startServer({
     }
 
     const owner = memberHint ? resolveWithMember(target, memberHint) : registry.resolve(target);
+    const knownOwner = owner ?? registry.ownerOf(target);
+    if (knownOwner && !identity.targetAllowed(authn.principal, knownOwner.agentId, target)) {
+      auditLine({ target, outcome: "rejected", detail: { reason: "target-scope-denied" } }, actor, "a2a");
+      sendJson(res, 404, { error: "target not remotely triggerable" });
+      return;
+    }
     if (!owner) {
       if (registry.knows(target)) {
         // skill 存在但成员离线：按 target offline 策略分流（契约 §5.1 / §1.1，M2）
@@ -138,11 +247,16 @@ export function startServer({
 
   /** A2A 门：JSON-RPC 2.0 三方法（message/stream M4，试点期明确 UNSUPPORTED）。 */
   async function handleA2A(req, res) {
-    const actor = authorizeClient(req);
-    if (!actor) {
-      sendJson(res, 401, { error: "client key required" });
+    const authn = await auth.authenticate(req, { session: true, pat: true });
+    if (!authn) {
+      sendJson(res, 401, { error: "PAT or session required" });
       return;
     }
+    if (authn.principal.user.forcePasswordChange) {
+      sendJson(res, 403, { error: "password_change_required" });
+      return;
+    }
+    const actor = actorForRequest(req, authn.principal);
     let rpc;
     try {
       rpc = await readJson(req);
@@ -154,22 +268,29 @@ export function startServer({
       sendJson(res, 400, { error: "jsonrpc 2.0 required" });
       return;
     }
+    const mutationMethods = new Set(["message/send", "tasks/cancel", "tasks/approve"]);
+    if (mutationMethods.has(rpc.method) && !auth.requireCsrf(req, authn)) {
+      rpcError(res, rpc.id, JSONRPC_ERRORS.ILLEGAL, "CSRF 校验失败");
+      return;
+    }
 
     if (rpc.method === "tasks/get") {
       const id = String(rpc.params?.id ?? "");
-      const task = queue.toA2A(id);
-      if (!task) {
+      const raw = queue.get(id);
+      if (!raw || !identity.hasPermission(authn.principal, "tasks.read")
+        || !identity.targetAllowed(authn.principal, raw.member, raw.target)) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
         return;
       }
-      rpcResult(res, rpc.id, task);
+      rpcResult(res, rpc.id, queue.toA2A(id));
       return;
     }
 
     if (rpc.method === "tasks/cancel") {
       const id = String(rpc.params?.id ?? "");
       const raw = queue.get(id);
-      if (!raw) {
+      if (!raw || !identity.hasPermission(authn.principal, "tasks.cancel")
+        || !identity.targetAllowed(authn.principal, raw.member, raw.target)) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
         return;
       }
@@ -185,6 +306,10 @@ export function startServer({
     }
 
     if (rpc.method === "message/send") {
+      if (!identity.hasPermission(authn.principal, "targets.execute")) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "缺少 targets.execute 权限");
+        return;
+      }
       const message = rpc.params?.message ?? {};
       const target = parseTarget(firstText(message.parts));
       if (!target) {
@@ -193,12 +318,11 @@ export function startServer({
       }
       const [skillId, memberHint] = target;
       const owner = memberHint ? resolveWithMember(skillId, memberHint) : registry.resolve(skillId);
-      // 授权矩阵（M4 F4，AC4）：客户端 → 成员/skill 白名单，拒绝留审计
-      const member = owner?.agentId ?? memberHint ?? "";
-      const gate = acl?.check?.({ actor, skillId, member });
-      if (gate && !gate.allowed) {
-        auditLine({ target: skillId, outcome: "rejected", detail: { reason: `acl-denied：${gate.reason}` } }, actor, "a2a");
-        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, `授权矩阵拒绝：${gate.reason}`);
+      const knownOwner = owner ?? registry.ownerOf(skillId);
+      const member = knownOwner?.agentId ?? memberHint ?? "";
+      if (knownOwner && !identity.targetAllowed(authn.principal, member, skillId)) {
+        auditLine({ target: skillId, outcome: "rejected", detail: { reason: "target-scope-denied" } }, actor, "a2a");
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "target scope denied");
         return;
       }
       if (!owner) {
@@ -237,7 +361,8 @@ export function startServer({
       // M4 F2：SSE 步骤级进度——订阅 task 状态变更，帧形状对齐 A2A spec（result: TaskStatusUpdateEvent / TaskArtifactUpdateEvent）
       const id = String(rpc.params?.id ?? rpc.params?.taskId ?? "");
       const task = queue.get(id);
-      if (!task) {
+      if (!task || !identity.hasPermission(authn.principal, "tasks.read")
+        || !identity.targetAllowed(authn.principal, task.member, task.target)) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
         return;
       }
@@ -284,7 +409,8 @@ export function startServer({
       const id = String(rpc.params?.id ?? "");
       const decision = rpc.params?.decision === "reject" ? "reject" : "approve";
       const raw = queue.get(id);
-      if (!raw) {
+      if (!raw || !identity.hasPermission(authn.principal, "tasks.approve")
+        || !identity.targetAllowed(authn.principal, raw.member, raw.target)) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
         return;
       }
@@ -300,7 +426,7 @@ export function startServer({
         return;
       }
       // approve：下发恢复帧（agent 侧 input-required → working，继续执行）
-      const resumed = resumeTask?.({ task: raw, actor });
+      const resumed = await resumeTask?.({ task: raw, actor });
       if (!resumed) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "恢复失败：member-offline 或 hub 无恢复通道");
         return;
@@ -325,6 +451,130 @@ export function startServer({
     const url = new URL(req.url, "http://localhost");
     const pathname = url.pathname;
     try {
+      if (req.method === "GET" && pathname === "/api/setup/status") {
+        const status = await identity.setupStatus();
+        sendJson(res, 200, { required: status.required });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/setup") {
+        const status = await identity.setupStatus();
+        if (!status.required) {
+          sendJson(res, 410, { error: "setup_closed" });
+          return;
+        }
+        let payload;
+        try {
+          payload = await readJson(req);
+        } catch {
+          sendJson(res, 400, { error: "bad_json" });
+          return;
+        }
+        if (!auth.allowCredentialAttempt(req, payload?.username)) {
+          sendJson(res, 429, { error: "too_many_attempts" });
+          return;
+        }
+        try {
+          const created = await identity.setup(payload);
+          auth.setSessionCookie(res, created.token, created.expiresAt);
+          auth.resetCredentialAttempts(req, payload?.username);
+          auditLine({
+            target: "hub",
+            outcome: "completed",
+            detail: { reason: "first-superadmin-created", username: created.user.username },
+          }, `user:${created.user.username}`, "ops");
+          sendJson(res, 201, { user: created.user, csrfToken: created.csrfToken });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/session") {
+        let payload;
+        try {
+          payload = await readJson(req);
+        } catch {
+          sendJson(res, 400, { error: "bad_json" });
+          return;
+        }
+        if (!auth.allowCredentialAttempt(req, payload?.username)) {
+          sendJson(res, 429, { error: "too_many_attempts" });
+          return;
+        }
+        const loggedIn = await identity.login(payload);
+        if (!loggedIn) {
+          auditLine({
+            target: "hub",
+            outcome: "rejected",
+            detail: { reason: "login-failed", username: String(payload?.username ?? "").slice(0, 64) },
+          }, "anonymous", "ops");
+          sendJson(res, 401, { error: "invalid_credentials" });
+          return;
+        }
+        auth.resetCredentialAttempts(req, payload?.username);
+        auth.setSessionCookie(res, loggedIn.token, loggedIn.expiresAt);
+        auditLine({ target: "hub", outcome: "completed", detail: { reason: "login-succeeded" } }, `user:${loggedIn.user.username}`, "ops");
+        sendJson(res, 200, { user: loggedIn.user, csrfToken: loggedIn.csrfToken });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/logout") {
+        const authn = await requirePrincipal(req, res, null, {
+          session: true,
+          pat: false,
+          mutation: true,
+          allowForcedPasswordChange: true,
+        });
+        if (!authn) return;
+        await identity.logout(authn.token);
+        auth.clearSessionCookie(res);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/me") {
+        const authn = await requirePrincipal(req, res, null, {
+          session: true,
+          pat: false,
+          allowForcedPasswordChange: true,
+        });
+        if (!authn) return;
+        sendJson(res, 200, {
+          user: authn.principal.user,
+          role: authn.principal.role,
+          permissions: authn.principal.permissions,
+          csrfToken: authn.principal.csrfToken,
+        });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/me/password") {
+        const authn = await requirePrincipal(req, res, null, {
+          session: true,
+          pat: false,
+          mutation: true,
+          allowForcedPasswordChange: true,
+        });
+        if (!authn) return;
+        try {
+          const payload = await readJson(req);
+          const user = await identity.changeOwnPassword(authn.principal, payload?.currentPassword, payload?.newPassword);
+          auth.clearSessionCookie(res);
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "password-changed" } }, authn.principal.actor, "ops");
+          sendJson(res, 200, { ok: true, user, reloginRequired: true });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      const setup = await identity.setupStatus();
+      if (setup.required && isRuntimePath(pathname)) {
+        sendJson(res, 503, { error: "setup_required" });
+        return;
+      }
+
       if (req.method === "GET" && pathname === "/.well-known/agent-card.json") {
         sendJson(res, 200, registry.aggregateCard());
         return;
@@ -340,13 +590,60 @@ export function startServer({
         return;
       }
 
+      if (req.method === "GET" && pathname === "/api/agent-credentials") {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false });
+        if (!authn) return;
+        if (authn.principal.role.id !== "superadmin") {
+          sendJson(res, 403, { error: "forbidden" });
+          return;
+        }
+        sendJson(res, 200, { agentIds: Object.keys(secrets.get("agentTokenHashes")).sort() });
+        return;
+      }
+
+      const agentCredentialMatch = pathname.match(/^\/api\/agent-credentials\/([^/]+)$/);
+      if ((req.method === "POST" || req.method === "DELETE") && agentCredentialMatch) {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        if (authn.principal.role.id !== "superadmin") {
+          sendJson(res, 403, { error: "forbidden" });
+          return;
+        }
+        try {
+          const agentId = normalizeAgentId(decodeURIComponent(agentCredentialMatch[1]));
+          if (req.method === "DELETE") {
+            const revoked = revokeAgentToken(secrets, agentId);
+            auditLine({
+              target: "hub",
+              outcome: "completed",
+              detail: { reason: "agent-token-revoked", agentId, existed: revoked },
+            }, authn.principal.actor, "ops");
+            sendJson(res, 200, { ok: true, agentId, revoked });
+          } else {
+            const token = issueAgentToken();
+            const hashes = secrets.get("agentTokenHashes");
+            secrets.set({ agentTokenHashes: { ...hashes, [agentId]: hashAgentToken(token) } });
+            auditLine({
+              target: "hub",
+              outcome: "completed",
+              detail: { reason: "agent-token-issued", agentId, replaced: Object.hasOwn(hashes, agentId) },
+            }, authn.principal.actor, "ops");
+            sendJson(res, 201, { agentId, token });
+          }
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
       if (req.method === "POST" && pathname === "/api/artifacts") {
         const token = parseBearer(req.headers.authorization);
-        if (!token || !secrets.get("agentTokens").includes(token)) {
+        const agentId = token ? authenticateAgentToken(secrets, token) : null;
+        if (!agentId) {
           sendJson(res, 401, { error: "agent token required" });
           return;
         }
-        const raw = await readBody(req, 5 * 1024 * 1024); // 契约 §7：内联上限 5MB
+        const raw = await readBody(req, 7 * 1024 * 1024);
         let payload;
         try {
           payload = JSON.parse(raw);
@@ -354,50 +651,289 @@ export function startServer({
           sendJson(res, 400, { error: "bad json" });
           return;
         }
-        const name = String(payload?.name ?? "artifact.bin");
-        if (!payload?.data) {
-          sendJson(res, 400, { error: "缺少 data" });
+        const taskId = String(payload?.taskId ?? "");
+        const task = queue.get(taskId);
+        if (!task || task.member !== agentId) {
+          auditLine({
+            target: task?.target ?? "hub",
+            ...(task?.id ? { taskId: task.id } : {}),
+            outcome: "rejected",
+            detail: { reason: "artifact-task-owner-mismatch", agentId, requestedTaskId: taskId },
+          }, `agent:${agentId}`, "ops");
+          sendJson(res, 404, { error: "task not found" });
           return;
         }
-        const saved = artifacts.save(name, Buffer.from(String(payload.data), "utf8"));
-        sendJson(res, 200, { artifactUrl: saved.artifactUrl });
+        if (payload?.encoding !== "base64" || typeof payload?.content !== "string" || !payload?.digest) {
+          sendJson(res, 400, { error: "taskId/name/content(base64)/digest required" });
+          return;
+        }
+        let buffer;
+        try {
+          buffer = Buffer.from(payload.content, "base64");
+          if (buffer.toString("base64").replace(/=+$/, "") !== payload.content.replace(/=+$/, "")) {
+            throw new Error("invalid base64");
+          }
+        } catch {
+          sendJson(res, 400, { error: "invalid artifact content" });
+          return;
+        }
+        if (buffer.length > 5 * 1024 * 1024) {
+          sendJson(res, 413, { error: "artifact exceeds 5MB" });
+          return;
+        }
+        try {
+          const saved = artifacts.save({
+            taskId,
+            member: task.member,
+            target: task.target,
+            name: payload.name,
+            digest: String(payload.digest),
+            buffer,
+          });
+          const artifact = {
+            name: saved.name,
+            parts: [{ kind: "file", uri: saved.artifactUrl }],
+            metadata: {
+              artifactId: saved.artifactId,
+              taskId,
+              member: saved.member,
+              target: saved.target,
+              digest: saved.digest,
+              size: saved.size,
+            },
+          };
+          queue.addArtifact(taskId, artifact);
+          auditLine({
+            target: task.target,
+            taskId,
+            outcome: task.state,
+            detail: { reason: "artifact-uploaded", artifactId: saved.artifactId, digest: saved.digest, size: saved.size },
+          }, `agent:${agentId}`, "a2a");
+          sendJson(res, 201, { artifact });
+        } catch (error) {
+          sendJson(res, error.code === "digest-mismatch" ? 422 : 400, { error: error.code ?? "invalid-artifact", message: error.message });
+        }
         return;
       }
 
       if (req.method === "GET" && pathname.startsWith("/api/artifacts/")) {
-        const name = decodeURIComponent(pathname.slice("/api/artifacts/".length));
-        const buffer = artifacts.read(name);
-        if (!buffer) {
+        const authn = await requirePrincipal(req, res, "artifacts.read");
+        if (!authn) return;
+        const artifactId = decodeURIComponent(pathname.slice("/api/artifacts/".length));
+        const metadata = artifacts.metadata(artifactId);
+        if (!metadata || !identity.targetAllowed(authn.principal, metadata.member, metadata.target)) {
           sendJson(res, 404, { error: "artifact not found" });
           return;
         }
-        res.writeHead(200, { "Content-Type": "application/octet-stream" });
-        res.end(buffer);
+        const stored = artifacts.read(artifactId);
+        res.writeHead(200, {
+          "Content-Type": "application/octet-stream",
+          "Content-Length": stored.buffer.length,
+          "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(metadata.name)}`,
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(stored.buffer);
         return;
       }
 
-      if (req.method === "POST" && pathname === "/api/bootstrap") {
-        if (secrets.has("dashboardToken")) {
-          sendJson(res, 409, { error: "管理口令已设置" });
-          return;
+      if (req.method === "GET" && pathname === "/api/users") {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false });
+        if (!authn) return;
+        sendJson(res, 200, { users: await identity.listUsers() });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/users") {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const user = await identity.createUser(authn.principal, await readJson(req));
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "user-created", username: user.username, roleId: user.roleId } }, authn.principal.actor, "ops");
+          sendJson(res, 201, { user });
+        } catch (error) {
+          sendIdentityError(res, error);
         }
-        const { token } = await readJson(req);
-        if (typeof token !== "string" || token.trim().length < 8) {
-          sendJson(res, 400, { error: "口令至少 8 位" });
-          return;
+        return;
+      }
+
+      const userResetMatch = pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
+      if (req.method === "POST" && userResetMatch) {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const payload = await readJson(req);
+          const user = await identity.resetPassword(authn.principal, decodeURIComponent(userResetMatch[1]), payload?.password);
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "user-password-reset", username: user.username } }, authn.principal.actor, "ops");
+          sendJson(res, 200, { user });
+        } catch (error) {
+          sendIdentityError(res, error);
         }
-        secrets.set({ dashboardToken: token.trim() });
-        auditLine({ target: "hub", outcome: "completed", detail: { reason: "dashboard 口令已设置" } }, "human", "ops");
-        return sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      const userMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
+      if (req.method === "PATCH" && userMatch) {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const user = await identity.updateUser(authn.principal, decodeURIComponent(userMatch[1]), await readJson(req));
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "user-updated", username: user.username, roleId: user.roleId, disabled: user.disabled } }, authn.principal.actor, "ops");
+          sendJson(res, 200, { user });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/roles") {
+        const authn = await requirePrincipal(req, res, "system.read", { session: true, pat: false });
+        if (!authn) return;
+        sendJson(res, 200, { roles: await identity.listRoles() });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/roles") {
+        const authn = await requirePrincipal(req, res, "roles.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const role = await identity.createRole(authn.principal, await readJson(req));
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "role-created", roleId: role.id } }, authn.principal.actor, "ops");
+          sendJson(res, 201, { role });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      const roleMatch = pathname.match(/^\/api\/roles\/([^/]+)$/);
+      if ((req.method === "PATCH" || req.method === "DELETE") && roleMatch) {
+        const authn = await requirePrincipal(req, res, "roles.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        const roleId = decodeURIComponent(roleMatch[1]);
+        try {
+          if (req.method === "DELETE") {
+            await identity.deleteRole(authn.principal, roleId);
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "role-deleted", roleId } }, authn.principal.actor, "ops");
+            sendJson(res, 200, { ok: true });
+          } else {
+            const role = await identity.updateRole(authn.principal, roleId, await readJson(req));
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "role-updated", roleId } }, authn.principal.actor, "ops");
+            sendJson(res, 200, { role });
+          }
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/pats") {
+        const authn = await requirePrincipal(req, res, "pats.self.manage", { session: true, pat: false });
+        if (!authn) return;
+        sendJson(res, 200, { pats: await identity.listPats(authn.principal) });
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/pats") {
+        const authn = await requirePrincipal(req, res, "pats.self.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const payload = await readJson(req);
+          const issued = await identity.createPat(authn.principal, {
+            name: payload?.name,
+            scopes: payload?.scopes,
+            targetAllow: payload?.targetAllow,
+            targetDeny: payload?.targetDeny,
+            expiresAt: payload?.expiresAt,
+          });
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "pat-created", patId: issued.pat.id, name: issued.pat.name } }, authn.principal.actor, "ops");
+          sendJson(res, 201, issued);
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      const patMatch = pathname.match(/^\/api\/pats\/([^/]+)$/);
+      if (req.method === "DELETE" && patMatch) {
+        const authn = await requirePrincipal(req, res, "pats.self.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const patId = decodeURIComponent(patMatch[1]);
+          await identity.revokePat(authn.principal, patId);
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: "pat-revoked", patId } }, authn.principal.actor, "ops");
+          sendJson(res, 200, { ok: true });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/wecom/config") {
+        const authn = await requirePrincipal(req, res, "wecom.manage", { session: true, pat: false });
+        if (!authn) return;
+        sendJson(res, 200, { config: await wecomConfigView() });
+        return;
+      }
+
+      if (req.method === "PATCH" && pathname === "/api/wecom/config") {
+        const authn = await requirePrincipal(req, res, "wecom.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const payload = await readJson(req);
+          const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+          const values = {};
+          if (Object.hasOwn(input, "botId")) values.wecomBotId = normalizeSecretString(input.botId, "botId");
+          if (Object.hasOwn(input, "botSecret")) values.wecomBotSecret = normalizeSecretString(input.botSecret, "botSecret");
+          if (Object.hasOwn(input, "notifyChatId")) values.wecomNotifyChatId = normalizeConfigId(input.notifyChatId, "notifyChatId", { allowEmpty: true });
+          if (Object.hasOwn(input, "allowedUserIds")) values.wecomAllowedUserIds = normalizeConfigIds(input.allowedUserIds, "allowedUserIds");
+          if (Object.hasOwn(input, "allowedChatIds")) values.wecomAllowedChatIds = normalizeConfigIds(input.allowedChatIds, "allowedChatIds");
+          secrets.set(values);
+          await wecomBot?.start();
+          auditLine({
+            target: "wecom",
+            outcome: "completed",
+            detail: {
+              reason: "wecom-config-updated",
+              fields: Object.keys(values).map((field) => field === "wecomBotSecret" ? "botSecret" : field.replace(/^wecom/, "")),
+            },
+          }, authn.principal.actor, "ops");
+          sendJson(res, 200, { config: await wecomConfigView() });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (req.method === "POST" && pathname === "/api/wecom/service-pat/rotate") {
+        const authn = await requirePrincipal(req, res, "wecom.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        try {
+          const rotated = await rotateWecomServicePat(authn.principal);
+          auditLine({
+            target: "wecom",
+            outcome: "completed",
+            detail: {
+              reason: "wecom-service-pat-rotated",
+              patId: rotated.pat.id,
+              previousPatId: rotated.previousPatId,
+              previousRevoked: rotated.previousRevoked,
+            },
+          }, authn.principal.actor, "ops");
+          sendJson(res, 201, {
+            pat: rotated.pat,
+            serviceAccount: rotated.serviceAccount,
+            previousRevoked: rotated.previousRevoked,
+          });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
       }
 
       if (req.method === "POST" && pathname.startsWith("/api/webhook/")) {
-        // 通用外部事件入口（PRD-3 F4）：Bearer clientKey 鉴权，事件入流水 → 规则引擎消费
-        const actor = authorizeClient(req);
-        if (!actor) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
+        const authn = await requirePrincipal(req, res, "webhooks.invoke", { session: false, pat: true });
+        if (!authn) return;
+        const actor = authn.principal.actor;
         const source = pathname.slice("/api/webhook/".length).replace(/[^a-zA-Z0-9._-]/g, "") || "default";
         let body;
         try {
@@ -405,72 +941,81 @@ export function startServer({
         } catch {
           body = {};
         }
-        const result = await ingestWebhook?.({ source, body });
+        await ingestWebhook?.({ source, body, actor });
         sendJson(res, 202, { accepted: true, source, actor });
         return;
       }
 
-      if (req.method === "POST" && pathname === "/api/session") {
-        if (!authorizeClient(req)) {
-          sendJson(res, 401, { error: "管理口令错误" });
-          return;
-        }
-        sendJson(res, 200, { ok: true });
-        return;
-      }
-
       if (req.method === "GET" && pathname === "/api/status") {
-        if (!authorizeClient(req)) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
-        const tasks = queue.list();
-        sendJson(res, 200, {
+        const authn = await requirePrincipal(req, res, "system.read");
+        if (!authn) return;
+        const visibleMemberIds = new Set(
+          registry.catalog()
+            .filter((member) => (member.skills ?? []).some((skill) => identity.targetAllowed(authn.principal, member.agentId, skill.id)))
+            .map((member) => member.agentId),
+        );
+        const tasks = queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target));
+        const body = {
           version: process.env.NOVOARD_VERSION ?? "dev",
           startedAt: server.startedAt ?? null,
-          members: registry.status(),
+          members: registry.status().filter((member) => visibleMemberIds.has(member.agentId)),
           tasks: {
             total: tasks.length,
             active: tasks.filter((t) => !queue.isTerminal(t.state)).length,
           },
-          secrets: secrets.view(),
-        });
+        };
+        if (identity.hasPermission(authn.principal, "wecom.manage")) body.secrets = secrets.view();
+        sendJson(res, 200, body);
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/targets") {
-        if (!authorizeClient(req)) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
-        sendJson(res, 200, { catalog: registry.catalog() });
+        const authn = await requirePrincipal(req, res, "targets.read");
+        if (!authn) return;
+        const catalog = registry.catalog().map((member) => ({
+          ...member,
+          skills: (member.skills ?? []).filter((skill) => identity.targetAllowed(authn.principal, member.agentId, skill.id)),
+        })).filter((member) => member.skills.length > 0);
+        sendJson(res, 200, { catalog });
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/tasks") {
-        if (!authorizeClient(req)) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
-        sendJson(res, 200, { tasks: queue.list() });
+        const authn = await requirePrincipal(req, res, "tasks.read");
+        if (!authn) return;
+        sendJson(res, 200, {
+          tasks: queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target)),
+        });
         return;
       }
 
       if (req.method === "GET" && pathname === "/api/events") {
-        if (!authorizeClient(req)) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
-        sendJson(res, 200, { events: audit.list() });
+        const authn = await requirePrincipal(req, res, "audit.read");
+        if (!authn) return;
+        sendJson(res, 200, {
+          events: audit.list().filter((event) => {
+            if (!event.target || event.target === "hub" || event.target === "-") return true;
+            const task = event.taskId ? queue.get(event.taskId) : null;
+            const member = event.member ?? task?.member;
+            if (!member) return identity.hasPermission(authn.principal, "users.manage");
+            return identity.targetAllowed(authn.principal, member, event.target);
+          }),
+        });
         return;
       }
 
-      if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(renderDashboard());
+      if (isRuntimePath(pathname)) {
+        sendJson(res, 404, { error: "not found" });
         return;
       }
 
+      if (setup.required && req.method === "GET" && String(req.headers.accept ?? "").includes("text/html")
+        && !["/", "/index.html", "/setup"].includes(pathname)) {
+        res.writeHead(302, { Location: "/setup", "Cache-Control": "no-store" });
+        res.end();
+        return;
+      }
+      if (staticSite.serve(req, res, pathname)) return;
       sendJson(res, 404, { error: "not found" });
     } catch (error) {
       log.error?.(`HTTP 处理异常：${error.message}`);
@@ -484,6 +1029,57 @@ export function startServer({
       resolve(server);
     });
   });
+}
+
+function sendIdentityError(res, error) {
+  const code = String(error?.code ?? "identity_error");
+  const status = code === "already-initialized" || code.endsWith("-conflict") || code === "role-in-use" || code === "rotation-in-progress"
+    ? 409
+    : code === "user-not-found" || code === "role-not-found" || code === "pat-not-found"
+      ? 404
+      : code === "forbidden" || code === "last-superadmin" || code === "scope-exceeds-role" || code === "reserved-permission"
+        ? 403
+        : 400;
+  sendJson(res, status, { error: code, message: String(error?.message ?? "identity error") });
+}
+
+function identityErrorLike(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function normalizeSecretString(value, field) {
+  const text = String(value ?? "").trim();
+  if (text.length > 512 || /[\u0000-\u001f\u007f]/.test(text)) {
+    throw identityErrorLike("invalid-wecom-config", `${field} 格式无效`);
+  }
+  return text;
+}
+
+function normalizeConfigId(value, field, { allowEmpty = false } = {}) {
+  const text = String(value ?? "").trim();
+  if ((!allowEmpty && !text) || text.length > 128 || /[\s\u0000-\u001f\u007f]/.test(text)) {
+    throw identityErrorLike("invalid-wecom-config", `${field} 格式无效`);
+  }
+  return text;
+}
+
+function normalizeConfigIds(value, field) {
+  if (!Array.isArray(value) || value.length > 500) {
+    throw identityErrorLike("invalid-wecom-config", `${field} 必须是最多 500 项的数组`);
+  }
+  return [...new Set(value.map((item) => normalizeConfigId(item, field)))];
+}
+
+function isRuntimePath(pathname) {
+  return pathname === "/api"
+    || pathname.startsWith("/api/")
+    || pathname === "/a2a"
+    || pathname.startsWith("/a2a/")
+    || pathname === "/tunnel"
+    || pathname.startsWith("/tunnel/")
+    || pathname.startsWith("/.well-known/");
 }
 
 function plainVars(v) {

@@ -99,7 +99,18 @@ M7 拆仓后运行期清理与验收面收口，一轮完成四件事：
 - [x] intranet-weekly 成员退役（用户决策"删了，功能由 novoard-agent 覆盖"）：重庆 CVM 停服禁用删 unit、/opt/novoard-lite 与专装 node20 全清；审计/replay/配置/targets 归档 docs/archive/intranet-weekly-retired/；hub 侧 fleet 定义、secrets token（线上+本地）同步删除；ADR-0003 内网出站隧道结论沉淀文档不变，重建路径 = 任意内网机器下载 linux-x64 二进制跑向导（架构验证过的运维动作）
 - [x] mac-work 常驻化（照 mac-home 模板）：数据目录 ~/Library/Application Support/novoard/agent-mac-work/（agent.json 0600 + 独立端口 39872 + 定义迁移）+ launchd plist；实测暴露 skill 命名空间全局唯一设计约束——M1"两台 Mac 同 id"设计在联邦唯一命名下不成立，mac-work 改 dev-build-investm-work（commit 9217b5f，测试断言同步）
 - [x] AC2 IM 审批恢复收口（M4 最后验收面）：bot 新增 approve/reject <taskId> 语法 → /a2a tasks/approve（clientKeys 池鉴权，与面板/磁贴同一状态机零旁路）；线上端到端验收 approval-demo：input-required → approve → working → completed 全链（commit a2b6cc3，测试 56/56）
-- [x] agent 仓 win32 CI 修复：check-contract-copy.mjs 动态 import 裸 Windows 路径被解析为 d: 协议致 contract-gate 失败 → pathToFileURL（commit f77b1db，v0.1.2）；win32-x64 产物已挂 Release，win-dev 升级通道恢复；macos-13 darwin-x64 runner 稀缺排队中会自动补挂
+- [x] agent 仓 win32 CI 修复：check-contract-copy.mjs 动态 import 裸 Windows 路径被解析为 d: 协议致 contract-gate 失败 → pathToFileURL（commit f77b1db，v0.1.2）；win32-x64 产物已挂 Release，win-dev 升级通道恢复。旧 `macos-13` 队列问题后续由 agent v0.3.1 的 `macos-15-intel` runner 收口。
+
+## M8 · 用户、角色、PAT 与管理控制台（2026-10-15）
+
+本里程碑按全新安装交付，不迁移旧 `.state`。生产入口统一为 `https://novoard.firoyang.com/` 根路径：
+
+- [x] 首访身份闭环：公开 first-claim 向导原子创建首个 `superadmin`，成功后永久关闭；会话使用不透明哈希令牌、`HttpOnly + Secure + SameSite=Strict` Cookie、Origin + CSRF；自助改密和强制首次改密均使旧会话失效。服务器 TTY `admin recover` 只恢复既有超级管理员，并吊销其会话和 PAT。
+- [x] RBAC 与 PAT：内置/自定义角色、最后一个有效超级管理员保护、集中式权限与 target allow/deny 裁决；具名 PAT 明文只显示一次，权限实时取“scope ∩ 当前角色”，管理接口仅接受浏览器会话。
+- [x] Agent 与 artifact 契约 2.0：Agent token 绑定 `agentId`，状态与 artifact 上传禁止跨成员冒充；artifact 绑定 task/member/target/digest，下载按任务 target 授权。独立 agent 仓 [PR #1](https://github.com/shichao402/novoard-agent/pull/1) 已合并，契约锁定拷贝与 Hub 九张 schema 保持一致。
+- [x] 企微通道收口：允许用户/会话双白名单默认拒绝，真实 sender/chat/command 写审计；不可登录服务账号使用最小权限 PAT，并支持“验证新令牌 → 切换 → 吊销旧令牌”的轮换。
+- [x] Hub 管理控制台：React 19 + TypeScript + Ant Design 6 / ProComponents 3 + Vite 7 + React Router 7 + TanStack Query；初始化、登录、概览、业务操作、用户、角色、PAT 与企微页面按路由拆包，由原生 Node Hub 在根路径静态托管。
+- [x] 门禁：Hub 77 项 Node 测试、前端 8 项组件测试、1 条 Playwright 首装闭环、Agent 40 项测试、前端依赖审计和 Docker 镜像构建统一纳入 CI。
 
 ## 里程碑之外（暂不排期）
 

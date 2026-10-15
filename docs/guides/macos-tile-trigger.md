@@ -7,7 +7,13 @@
 ## 前置条件
 
 - hub 已部署 CVM 且 HTTPS 入口可达（已满足）
-- 一个 clientKey（hub `.state/secrets.json` 的 `clientKeys` 池），或试点期免鉴权模式（未配置 clientKeys 时 `human` 直通，当前形态）
+- 为这个磁贴单独创建一个具备 `targets.execute`、且 target allow 覆盖目标的用户 PAT。把明文写入本机私密文件，不要写进脚本或仓库：
+
+```bash
+install -d -m 700 ~/.config/novoard
+umask 077
+printf '%s\n' 'nvp_创建时仅显示一次的明文' > ~/.config/novoard/pat
+```
 
 ## 磁贴形态（三选一，均已就绪）
 
@@ -23,7 +29,7 @@
 bash /Users/firoyang/workspace/Novoard/bin/novoard-tile.sh
 ```
 
-环境变量可覆盖默认值：`NOVOARD_HUB_URL` / `NOVOARD_TARGET` / `NOVOARD_MEMBER`。
+环境变量可覆盖默认值：`NOVOARD_HUB_URL` / `NOVOARD_TARGET` / `NOVOARD_MEMBER` / `NOVOARD_PAT_FILE`。也可临时用 `NOVOARD_PAT`，但不建议写进 shell profile。
 
 ### 形态 3：Shortcuts App 磁贴 / 全局热键（需手动建一次，ADR-0008 兜底方案）
 
@@ -61,6 +67,8 @@ Shortcuts 里 `messageId` 填固定字符串即可（如 `sc-hotkey`）；`text`
 | 受理 | 202 | `{ "taskId": "...", "state": "submitted" }` |
 | 成员离线（skill 存在） | 202 | `{ "state": "rejected", "reason": "member-offline" }` + 通知扇出（PRD-3 US4） |
 | 查无 skill / expose: local | 404 | `{ "error": "target not remotely triggerable" }` |
+| PAT 缺失/失效 | 401 | `{ "error": "unauthorized" }` |
+| PAT scope 或 target 越权 | 403 | `{ "error": "forbidden" }` |
 | JSON 非法 | 400 | `{ "error": "bad json" }` |
 | 缺 target | 400 | `{ "error": "缺少 target" }` |
 
@@ -74,9 +82,6 @@ Shortcuts 里 `messageId` 填固定字符串即可（如 `sc-hotkey`）；`text`
 | B 离线拒绝 | launchctl bootout mac-home → 磁贴触发 | 202 rejected + `member-offline` 审计 + 通知扇出（chatId 未学习，降级日志，符合设计） |
 | C 通知扇出 | 查 hub 日志 | offline-reject 与 terminal 事件均尝试扇出，降级日志可见 |
 
-原 iOS 版验收场景（对合盖 Mac B 触发 → 30s 内企微通知）语义已由场景 A/B/C 覆盖：离线判定、拒绝分流、通知扇出（降级形态）全部按契约工作。待企微 chatId 学习后（给 bot 发一条消息），通知自动升级为真实推送。
+原 iOS 版验收场景（对合盖 Mac B 触发 → 30s 内企微通知）语义已由场景 A/B/C 覆盖。上表是 2026-10-13 的历史记录；当前版本已删除 chatId 热学习，通知目标只能由超级管理员固定配置。
 
-## 后续
-
-- mac-work 常驻（launchd 同款 plist 换 agentId）待用户确认是否需要
-- 企微 chatId 学习：在企微里给 bot 发一条消息即可解锁全量通知
+当前企微通知目标由超级管理员固定配置，不再从消息热学习；默认空白名单会拒绝企微触发与审批。

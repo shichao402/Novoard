@@ -33,27 +33,31 @@ Novoard 是整个系统的产品仓库，承载：
 | --- | --- |
 | [docs/adr](docs/adr/README.md) | 架构决策记录（ADR） |
 | [docs/architecture](docs/architecture/overview.md) | 系统总览、拓扑、契约 |
-| [docs/roadmap](docs/roadmap/roadmap.md) | 里程碑 M0-M5 |
+| [docs/roadmap](docs/roadmap/roadmap.md) | 里程碑 M0-M8 |
 | [docs/prd](docs/prd/README.md) | 产品需求文档（按能力域拆分） |
 | [docs/research](docs/research/0001-market-scan.md) | 外部调研：同类产品、业界参照、A2A 协议；扩展形态推演与接入调研 |
 | [agents](agents/mac-work/targets.yaml) | 试点 target 定义（三 agent 的 targets.yaml + stepTemplates，各 lite-agent 以本仓为上游同步） |
 
 ## 状态
 
-M7（拆仓与全员二进制终态）已收官：agent 拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)（一份源码四平台 SEA 二进制，mac-home/win-dev 均以二进制接入线上 hub）；hub 收敛为纯服务端（注册表/队列/隧道/A2A/通知/规则/dashboard），契约 SSOT 保留在本仓 `docs/architecture/schemas/`，双仓 CI 门禁防漂移。测试全绿。见 [roadmap](docs/roadmap/roadmap.md)。
+M8 用户体系与管理控制台已落地：全新安装通过首访向导创建第一个 `superadmin`，随后由会话 + CSRF、内置/自定义角色、target 范围和具名 PAT 统一授权；Agent 与 artifact 契约升至 2.0。Dashboard 已升级为 React 19 + Ant Design 6 / ProComponents 3 + Vite 7 + React Router 7，并仍由同一个原生 Node Hub 在根路径托管。Agent 位于独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)。见 [roadmap](docs/roadmap/roadmap.md)。
 
 ## 开发
 
 ```bash
 npm install                # 内网镜像
+npm install --prefix web   # 管理控制台依赖
 npm run dev                # node --watch 热重载
-npm test                   # node --test
+npm test                   # 契约门禁 + Hub node:test
+npm run test:all           # Hub + 前端 + Playwright 全门禁
 NOVOARD_PORT=38666 npm start
 ```
 
-目录约定：`.state/`（hub 运行态，不进 git）下 `secrets.json`、`audit/`、`queue/`、`artifacts/`。端点：`/`（dashboard）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（快捷指令门）。
+首次本地启动前先执行 `npm run build:web`。空 `.state` 访问 `/` 会进入公开 first-claim 初始化向导；创建首位超级管理员后入口永久关闭。生产地址固定为 `https://novoard.firoyang.com/`。
 
-Agent（面板/runner/编辑器/接入向导）已拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)（M7）：一份源码四平台 SEA 二进制，契约 SSOT 仍以本仓 `docs/architecture/schemas/` 为准，agent 仓持锁定拷贝 + 双门禁防漂移。各成员接入用 Release 二进制（setup 向导或 agent.json）。
+目录约定：`.state/`（hub 运行态，不进 git）下含 `install.json`、`identity.json`、`sessions.json`、`secrets.json`、`audit/`、`queue/`、`artifacts/`。端点：`/`（管理控制台）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（会话/PAT 快捷操作门）。
+
+Agent（面板/runner/编辑器/接入向导）已拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)：Windows/macOS 通过桌面托盘轻壳承载同一 SEA sidecar，Linux 分发无头 SEA zip；契约 SSOT 仍以本仓 `docs/architecture/schemas/` 为准。契约 2.0 要求每个 Agent token 唯一绑定 `agentId`，artifact 带 taskId 与 sha256 digest；各成员使用 2.x Release 接入。
 
 ## 背景讨论
 
