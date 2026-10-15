@@ -2,6 +2,3 @@
 .state/
 node_modules/
 *.local.json
-
-# SEA 打包产物与构建中间件（二进制/blob/官方 node 基底，不进 git）
-build/
