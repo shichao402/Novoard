@@ -3,8 +3,8 @@
 # 与 mac-home 共用 deploy-webapp 模板，vars 填机器差异（PRD-5 F2 模板机制试点验收场景）
 
 targets:
-  dev-build-investm:
-    title: 构建 InvestM dev 并部署本机
+  dev-build-investm-work:
+    title: 构建 InvestM dev 并部署本机（工位 Mac）
     template: deploy-webapp
     vars:
       repo: InvestM

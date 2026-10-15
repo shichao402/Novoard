@@ -67,8 +67,10 @@ test("两台 Mac 共用同一份 deploy-webapp 模板（PRD-5 F2 模板机制验
   const h = readFileSync(join(AGENTS_DIR, "mac-home", "templates", "deploy-webapp.yaml"), "utf8");
   assert.equal(w, h, "两台 Mac 的 deploy-webapp 模板内容必须逐字节一致");
   const wk = parse(readFileSync(join(AGENTS_DIR, "mac-work", "targets.yaml"), "utf8"));
-  const hm = parse(readFileSync(join(AGENTS_DIR, "mac-home", "targets.yaml"), "utf8"));
-  assert.ok(wk.targets["dev-build-investm"] && hm.targets["dev-build-investm"], "两台 Mac 都必须有 dev-build-investm target");
+  const hm = parse(readFileSync(join(AGENTS_DIR, "mac-home", "templates", "..", "targets.yaml"), "utf8"));
+  // skill id 全局唯一（hub 命名空间）：两台 Mac 的同能力 target 各持独立 id（M7 后 mac-work 加 -work 后缀）
+  assert.ok(wk.targets["dev-build-investm-work"], "mac-work 必须有 dev-build-investm-work target");
+  assert.ok(hm.targets["dev-build-investm"], "mac-home 必须有 dev-build-investm target");
 });
 
 test("模板 {{var}} 插值无来源即失败（契约 §1.2：不静默替换为空串）", () => {
