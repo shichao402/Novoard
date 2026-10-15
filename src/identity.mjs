@@ -973,8 +973,8 @@ function assertAnotherSuperadmin(identity, excludedUserId) {
 
 function validatePassword(password) {
   const text = String(password ?? "");
-  if (text.length < 12 || text.length > 256) {
-    throw identityError("invalid-password", "口令长度须为 12-256 个字符");
+  if (text.length < 10 || text.length > 256) {
+    throw identityError("invalid-password", "口令长度须为 10-256 个字符");
   }
 }
 

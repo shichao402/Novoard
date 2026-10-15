@@ -145,7 +145,7 @@ export default function UsersPage() {
                   <ProFormText.Password
                     name="password"
                     label="临时口令"
-                    rules={[{ required: true, min: 12, max: 256 }]}
+                    rules={[{ required: true, min: 10, max: 256 }]}
                   />
                 </ModalForm>
               ),
@@ -196,7 +196,7 @@ export default function UsersPage() {
           <ProFormText.Password
             name="password"
             label="临时口令"
-            rules={[{ required: true, min: 12, max: 256 }]}
+            rules={[{ required: true, min: 10, max: 256 }]}
           />
           <ProFormSelect
             name="roleId"
