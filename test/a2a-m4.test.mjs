@@ -13,7 +13,6 @@ import { WebSocket } from "ws";
 
 import { createHub } from "../src/main.mjs";
 import { createAcl } from "../src/acl.mjs";
-import { createAgentRuntime } from "../src/lite-agent/agent-runtime.mjs";
 
 function tmpDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m4-"));
@@ -265,33 +264,4 @@ test("F4 授权矩阵单元：未配置默认放行；dashboard 不受限", () =
   assert.equal(acl2.check({ actor: "client:with-k", skillId: "smoke-test", member: "mac-home" }).allowed, true);
   assert.equal(acl2.check({ actor: "client:with-k", skillId: "x", member: "other-member" }).allowed, false);
   rmSync(dir, { recursive: true, force: true });
-});
-
-test("agent-runtime 单元：requiresApproval 挂起 → resume 执行 → 终态", async () => {
-  const targets = {
-    "approval-target": {
-      title: "审批件", vars: {},
-      requiresApproval: true,
-      expanded: [{ script: "echo approved-run" }],
-    },
-  };
-  const rt = createAgentRuntime({ targets, log: { info() {} } });
-  const states = [];
-  const launchResult = rt.launch({
-    taskId: "t-appr-1", skillId: "approval-target", vars: {}, steps: targets["approval-target"].expanded,
-    onTerminal: (state, detail) => states.push([state, detail]),
-  });
-  assert.equal(launchResult.reason, "input-required");
-  assert.deepEqual(rt.runningTasks, [{ id: "t-appr-1", state: "input-required" }]);
-
-  // 未挂起的任务 resume 拒绝
-  assert.equal(rt.resume("t-nonexistent").ok, false);
-
-  // 恢复 → 执行 → completed
-  const r = rt.resume("t-appr-1");
-  assert.equal(r.ok, true);
-  await new Promise((resolve) => setTimeout(resolve, 800));
-  assert.ok(states.some(([s]) => s === "completed"), `应终态 completed：${JSON.stringify(states)}`);
-  assert.ok(states.some(([s]) => s === "input-required"));
-  assert.deepEqual(rt.runningTasks.filter((t) => t.id === "t-appr-1"), []);
 });

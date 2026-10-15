@@ -9,7 +9,7 @@
   Hub（CVM 常驻服务）── 任务队列 · 自动化规则 · 通知扇出 · 审计
         │  A2A over 出站隧道（agent 主动外连，穿 NAT）
         ▼
-  Agents（Mac lite-agent × 2 · 内网 lite-agent）── 本地 cron · target 定义 → 执行内核
+  Agents（novoard-agent 四平台二进制 · 身份：mac-work / mac-home / win-dev / intranet-weekly）
         │
         ▼
   本地部署实例（部署完成即在固定实例打开）
@@ -40,7 +40,7 @@ Novoard 是整个系统的产品仓库，承载：
 
 ## 状态
 
-M0（文档与契约）已收官；M1 试点接入进行中：hub 已部署上线腾讯云广州 CVM（`novoard.firoyang.com`，Docker 容器 + certbot HTTPS + nginx 443 反代，公网全链路与 e2e 闭环已验证：trigger → 下发 → 执行 → 终态回传 → 双侧审计对账）；lite-agent 已落地（`src/lite-agent/` 六模块，mac-work 已实际接入线上 hub）；试点 target 定义已落库（`agents/` 三 agent targets.yaml + 共用模板）；通知扇出与最小规则引擎已落地（企微 webhook 留空 stub）。测试 25 项全绿。待企微 bot 配置、mac-home/intranet-weekly 两环境接入与 iOS 快捷指令实测。见 [roadmap](docs/roadmap/roadmap.md)。
+M7（拆仓与全员二进制终态）已收官：agent 拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)（一份源码四平台 SEA 二进制，mac-home/win-dev 均以二进制接入线上 hub）；hub 收敛为纯服务端（注册表/队列/隧道/A2A/通知/规则/dashboard），契约 SSOT 保留在本仓 `docs/architecture/schemas/`，双仓 CI 门禁防漂移。测试全绿。见 [roadmap](docs/roadmap/roadmap.md)。
 
 ## 开发
 
@@ -51,13 +51,9 @@ npm test                   # node --test
 NOVOARD_PORT=38666 npm start
 ```
 
-目录约定：`.state/`（hub 运行态，不进 git）下 `secrets.json`、`audit/`、`queue/`、`artifacts/`；`.agent-state/`（lite-agent 运行态）下 `audit.jsonl`、`replay.jsonl`。端点：`/`（dashboard）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（快捷指令门）。
+目录约定：`.state/`（hub 运行态，不进 git）下 `secrets.json`、`audit/`、`queue/`、`artifacts/`。端点：`/`（dashboard）、`/tunnel`（WS 隧道）、`/a2a`（JSON-RPC）、`/.well-known/agent-card.json`、`/api/trigger`（快捷指令门）。
 
-lite-agent（两台 Mac / 内网服务器）：
-
-```bash
-node src/lite-agent/main.mjs    # agent.json 或环境变量：NOVOARD_AGENT_ID / NOVOARD_HUB_URL / NOVOARD_AGENT_TOKEN
-```
+Agent（面板/runner/编辑器/接入向导）已拆分至独立仓 [novoard-agent](https://github.com/shichao402/novoard-agent)（M7）：一份源码四平台 SEA 二进制，契约 SSOT 仍以本仓 `docs/architecture/schemas/` 为准，agent 仓持锁定拷贝 + 双门禁防漂移。各成员接入用 Release 二进制（setup 向导或 agent.json）。
 
 ## 背景讨论
 

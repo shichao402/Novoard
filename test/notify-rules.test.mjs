@@ -13,11 +13,41 @@ import { createNotify } from "../src/notify.mjs";
 import { createRules } from "../src/rules.mjs";
 import { createSecrets } from "../src/secrets.mjs";
 import { createHub } from "../src/main.mjs";
-import { createLiteAgent } from "../src/lite-agent/main.mjs";
+import { WebSocket } from "ws";
 
 function tmpDir() {
   return mkdtempSync(join(tmpdir(), "novoard-notify-test-"));
 }
+
+/** 契约级假 agent：连隧道 → hello 注册 → 应答 message/send 委派并回终态（拆仓后 hub 仓不再持 agent 实现，M7）。 */
+function fakeAgent({ port, token, card, driver }) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, { headers: { Authorization: `Bearer ${token}` } });
+  ws.on("open", () => {
+    ws.send(JSON.stringify({
+      v: 1, kind: "ops", msgId: "e-hello-rules-e2e", ts: new Date().toISOString(),
+      body: { type: "agent.hello", contractVersion: "1.0", agentId: "mac-work", token, card, inFlightTaskIds: [] },
+    }));
+  });
+  ws.on("message", (raw) => {
+    const env = JSON.parse(String(raw));
+    if (env.kind === "a2a" && env.body?.method === "message/send") driver?.({ env, ws });
+  });
+  return { ws, close: () => ws.close() };
+}
+
+/** 最小合法 card：两个可执行 target。 */
+const CARD = () => ({
+  name: "mac-work",
+  description: "工位 Mac · dev builder",
+  version: "1.0.0",
+  capabilities: { streaming: false, pushNotifications: true },
+  defaultInputModes: ["text"],
+  defaultOutputModes: ["text", "file"],
+  skills: [
+    { id: "dev-build-investm", name: "构建 InvestM dev", description: "pull → build → deploy", tags: ["dev"] },
+    { id: "smoke-test", name: "冒烟", description: "echo ok", tags: ["t"] },
+  ],
+});
 
 test("notify：未配置 webhook 降级日志不报错", async () => {
   const dir = tmpDir();
@@ -94,35 +124,22 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
   - when: { event: task-terminal, target: dev-build-investm, state: completed }
     then: { target: smoke-test }
 `);
-  const stubDir = tmpDir();
-  const { mkdirSync } = await import("node:fs");
-  mkdirSync(join(stubDir, "templates"), { recursive: true });
-  writeFileSync(join(stubDir, "targets.yaml"), `targets:
-  dev-build-investm:
-    title: 构建
-    steps: [{ script: "echo build" }]
-    expose: a2a
-    audit: summary
-    requiresApproval: false
-    notify: never
-  smoke-test:
-    title: 冒烟
-    steps: [{ script: "echo smoke" }]
-    expose: a2a
-    audit: summary
-    requiresApproval: false
-    notify: never
-`);
-  const agentState = tmpDir();
   const hub = await createHub({ stateDir: hubDir, port: 0, rulesPath, log: { info: () => {}, error: () => {}, warn: () => {} } });
   hub.secrets.set({ agentTokens: ["agt_rule_e2e_123456"], dashboardToken: "dash-pass-123456" });
   const port = hub.server.address().port;
   let agent = null;
   try {
-    const configPath = join(agentState, "agent.json");
-    writeFileSync(configPath, JSON.stringify({ agentId: "mac-work", hubUrl: `ws://127.0.0.1:${port}/tunnel`, agentToken: "agt_rule_e2e_123456", contractVersion: "1.0" }));
-    agent = await createLiteAgent({ configPath, agentDir: stubDir, stateDir: join(agentState, "astate"), log: {} });
-    await waitFor(() => agent.tunnel.registered, 3000);
+    // 契约级假 agent：收到 message/send 委派即回 completed 终态
+    agent = fakeAgent({
+      port, token: "agt_rule_e2e_123456", card: CARD(),
+      driver: ({ env, ws }) => {
+        ws.send(JSON.stringify({
+          v: 1, kind: "a2a", msgId: `e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, taskId: env.taskId, ts: new Date().toISOString(),
+          body: { jsonrpc: "2.0", method: "message/notification", params: { message: { messageId: `m-${Date.now()}`, role: "agent", parts: [], contextId: env.taskId, taskId: env.taskId, kind: "status-update", status: { state: "completed", message: "ok", timestamp: new Date().toISOString() } } } },
+        }));
+      },
+    });
+    await new Promise((r) => setTimeout(r, 300));
 
     // 触发 dev-build → completed → 规则触发 smoke-test → 自动执行到终态
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
@@ -142,11 +159,9 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
     // 规则触发进审计（PRD-5 NFR 审计同车道）
     assert.ok(hub.audit.list().some((e) => e.actor === "rule-engine" && e.target === "smoke-test" && e.outcome === "submitted"));
   } finally {
-    await agent?.stop();
+    agent?.close();
     await new Promise((r) => hub.server.close(r));
     rmSync(hubDir, { recursive: true, force: true });
-    rmSync(stubDir, { recursive: true, force: true });
-    rmSync(agentState, { recursive: true, force: true });
   }
 });
 

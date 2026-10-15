@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
@@ -49,6 +49,7 @@ test("模板文件结构合法（steps 套 step schema + vars 类型）且 targe
     for (const [id, t] of Object.entries(data.targets)) {
       if (!t.template) continue; // 内联 steps 型 target（如 approval-demo）不走模板链路
       const tplPath = join(AGENTS_DIR, agentId, "templates", `${t.template}.yaml`);
+      if (!existsSync(tplPath)) continue; // 模板随成员定义目录迁移（mac-home/mac-work 已移至本机数据目录），hub 仓仅校验现存文件
       const tpl = parse(readFileSync(tplPath, "utf8"));
       validateTemplate(agentId, t.template, tpl);
       // 模板未设默认值的插值变量必须被 target vars 覆盖（机器差异由 target 填）
@@ -75,7 +76,9 @@ test("模板 {{var}} 插值无来源即失败（契约 §1.2：不静默替换�
     const data = parse(readFileSync(join(AGENTS_DIR, agentId, "targets.yaml"), "utf8"));
     for (const [id, t] of Object.entries(data.targets)) {
       if (!t.template) continue; // 内联 steps 型：插值来源检查针对其自身 steps
-      const tpl = parse(readFileSync(join(AGENTS_DIR, agentId, "templates", `${t.template}.yaml`), "utf8"));
+      const tplPath = join(AGENTS_DIR, agentId, "templates", `${t.template}.yaml`);
+      if (!existsSync(tplPath)) continue; // 模板随成员定义目录迁移，hub 仓仅校验现存文件
+      const tpl = parse(readFileSync(tplPath, "utf8"));
       const available = new Set([...Object.keys(tpl.vars ?? {}), ...Object.keys(t.vars ?? {})]);
       for (const point of collectInterpolationPoints(tpl.steps)) {
         for (const m of point.value.matchAll(/\{\{(\w+)\}\}/g)) {

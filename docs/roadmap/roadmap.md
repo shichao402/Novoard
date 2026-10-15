@@ -90,7 +90,7 @@
 - [x] F1 契约锁定拷贝：hub 仓 `src/lite-agent/contract/`（frames + 九 schema 内建）+ 双仓门禁 scripts/check-contract-copy.mjs（CI 红线：SSOT 漂移即红；结构化等价比较：export 函数段 + schema 常量表）+ release 流水线挂门禁 + npm test 前置（commit 75d3aed）
 - [x] F2 独立仓 novoard-agent：git subtree split 保留 src/ 全历史（10 commits）→ src/ 布局 + package.json + 契约自检门禁（CONTRACT_VERSION v1.1 + 九 schema 行为样例）+ 契约级 mock-hub（Bearer 鉴权 / hello.ack / a2a message-send 委派 / 终态上行 / card.update）+ 测试 fixture 化（fleet 定义留 hub 仓）+ README；远端 github.com/shichao402/novoard-agent，30/30 绿（commit 4c6bfb0）
 - [x] F3 mac-home 切二进制：agent 仓 SCHEMA_DIR 修复（commit 681c01b，指向 src/contract/schemas）+ tag v0.1.1 触发四平台 CI；官方 node v22.23.3 darwin-x64 作 SEA 基底本机打包（110.7MB）；launchd plist 切二进制入口 + 定义目录迁移（agents/mac-home/ 含 targets.yaml+templates 迁入数据目录，agent.json/state 不动）；线上验证全绿：hub 聚合 card 含 mac-home 全部四 target（在线注册）、面板/编辑器 200、v0.2.1 修复生效、磁贴触发 smoke-test → completed（本地闭环）+ 重放队列 0 积压
-- [ ] F4 收尾（进行中）：hub 仓 roadmap 记账（本条）、双 Release 产物验证、win-dev 升级 v0.2.1 指引、hub 仓 lite-agent 去留决策（hub e2e 仍引用 src/lite-agent，与用户确认时机）
+- [x] F4 收尾：hub 仓 roadmap 记账、双 Release 产物验证、win-dev 升级 v0.2.1 指引；hub 仓 lite-agent 移除（用户拍板"现在就移除"）：`src/lite-agent/`、`scripts/build-agent.mjs`、SEA 打包 workflow、esbuild/postject devDeps 全部退役；hub 测试外科手术——e2e 改契约级 fakeAgent（notify-rules）、agent-runtime 单元块与 deriveCard 透传测试摘除（agent 仓已覆盖）、离线扩展字段测试改 hub 侧 schema 校验形态；契约门禁重写为 SSOT 自检（schema 合法性 + frames 行为样例，跨仓漂移防线在 agent 仓门禁）；55/55 绿。hub 仓收敛为纯服务端：注册表/队列/隧道/A2A/通知/规则/dashboard + 契约 SSOT
 
 ## 里程碑之外（暂不排期）
 

@@ -3,7 +3,7 @@
   "version": "0.2.1",
   "private": true,
   "type": "module",
-  "description": "Novoard hub：联邦注册表 + 任务队列 + A2A 端点 + 隧道（契约 v1.0 冻结基线）",
+  "description": "Novoard hub：联邦注册表 + 任务队列 + A2A 端点 + 隧道（契约 SSOT；agent 见 novoard-agent 仓）",
   "engines": {
     "node": ">=22"
   },
@@ -18,9 +18,5 @@
     "ajv": "^8.17.0",
     "ws": "^8.18.0",
     "yaml": "^2.5.0"
-  },
-  "devDependencies": {
-    "esbuild": "^0.28.2",
-    "postject": "^1.0.0-alpha.6"
   }
 }

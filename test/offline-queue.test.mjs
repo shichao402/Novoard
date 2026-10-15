@@ -17,7 +17,6 @@ import { join } from "node:path";
 import { createTaskQueue } from "../src/queue.mjs";
 import { createRegistry } from "../src/registry.mjs";
 import { createFrameValidator } from "../src/frames.mjs";
-import { deriveCard } from "../src/lite-agent/card.mjs";
 import { createHub } from "../src/main.mjs";
 
 function tmpStateDir() {
@@ -113,36 +112,19 @@ test("registry 单元：ownerOf 查离线归属与 skill 元数据", () => {
   assert.equal(registry.ownerOf("no-such"), null);
 });
 
-test("card 派生：offline 策略透传 x-novoard-offline（契约 v1.1）", () => {
+test("card 扩展字段：x-novoard-offline 随 skill 声明通过 hub 校验（契约 v1.1，card 派生由 agent 仓承载）", () => {
   const validate = createFrameValidator();
-  const card = deriveCard({
-    agentId: "mac-work",
-    targets: {
-      "dev-build-investm": {
-        title: "构建 InvestM dev",
-        expose: "a2a",
-        audit: "summary",
-        requiresApproval: false,
-        notify: "on-failure",
-        offline: "queue",
-        offlineTtl: "2h",
-        steps: [{ script: "echo hi" }],
-      },
-      "local-thing": {
-        title: "本地专用",
-        expose: "local",
-        audit: "none",
-        requiresApproval: false,
-        notify: "never",
-        steps: [{ script: "echo local" }],
-      },
-    },
+  const card = cardWithSkill({
+    id: "dev-build-investm",
+    name: "构建 InvestM dev",
+    description: "pull → build → deploy",
+    tags: ["dev"],
+    "x-novoard-offline": { policy: "queue", ttl: "2h" },
   });
   assert.equal(validate.agentCard(card).ok, true);
   const skill = card.skills.find((s) => s.id === "dev-build-investm");
   assert.equal(skill["x-novoard-offline"].policy, "queue");
   assert.equal(skill["x-novoard-offline"].ttl, "2h");
-  assert.ok(!card.skills.some((s) => s.id === "local-thing")); // expose: local 不进 card
 });
 
 test("HTTP 门：offline reject（默认）行为不变", async () => {

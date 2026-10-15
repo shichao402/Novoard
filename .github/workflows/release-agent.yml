@@ -9,24 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            platform: win32
-            arch: x64
-          - os: macos-latest
-            platform: darwin
-            arch: arm64
-          - os: macos-13
-            platform: darwin
-            arch: x64
-          - os: ubuntu-latest
-            platform: linux
-            arch: x64
-    runs-on: ${{ matrix.os }}
+  contract-gate:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,25 +21,5 @@ jobs:
       - run: npm test
       - name: Contract copy gate
         run: node scripts/check-contract-copy.mjs
-      - name: Build SEA binary
-        run: node scripts/build-agent.mjs
-      - name: Package zip (unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          cd build/dist/${{ matrix.platform }}-${{ matrix.arch }}
-          zip -r "../../../novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" .
-      - name: Package zip (windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "build/dist/${{ matrix.platform }}-${{ matrix.arch }}/*" -DestinationPath "novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
-      - name: Upload artifact (workflow debug)
-        uses: actions/upload-artifact@v4
-        with:
-          name: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}
-          path: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip
-      - name: Attach to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: novoard-agent-${{ matrix.platform }}-${{ matrix.arch }}.zip
+      - name: Note
+        run: echo "hub repo release: contract gate only; agent binaries live in novoard-agent repo"

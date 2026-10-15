@@ -40,11 +40,7 @@ secrets 已生成（2026-10-13，`deploy/.state/secrets.json`，600 权限、git
 
 ## 二·五、agent 侧接入
 
-```bash
-# Mac A/B（办公/家庭）
-NOVOARD_AGENT_DIR=agents/mac-work node src/lite-agent/main.mjs
-# agent.local.json 已含 agentId/hubUrl/agentToken；hubUrl 回填实际地址后启动
-```
+agent 已拆分至独立仓 novoard-agent（M7），各成员用 Release 二进制接入（setup 向导填 hub 地址 + agentId + token，或直接落 agent.json）。历史源码形态（`NOVOARD_AGENT_DIR=agents/mac-work node src/lite-agent/main.mjs`）已随 src/lite-agent 移除退役。
 
 ## 三、nginx + HTTPS（子目录并入既有 server 块）
 
@@ -57,7 +53,7 @@ nginx -t && systemctl reload nginx
 ## 四、验证链
 
 1. `curl -s http://127.0.0.1:38666/.well-known/agent-card.json` → 聚合 card（skills 空数组）
-2. mac-work lite-agent 启动 → 注册进 card、audit.jsonl 出现 working
+2. agent（novoard-agent 二进制）启动 → 注册进 card、audit 出现 working
 3. 磁贴门（docs/guides/macos-tile-trigger.md）：trigger → 202 submitted（公网 HTTPS，桌面磁贴/终端脚本/Shortcuts App 三形态）
 4. 规则链路：trigger dev-build-investm → completed → smoke-test 自动入队（rules.yaml 放 .state）
 

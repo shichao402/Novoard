@@ -165,16 +165,20 @@ test("hub 装配：member-event 规则源——member-offline → run target", a
   }
 });
 
-test("lite-agent card：x-novoard-notify 透传", async () => {
-  const { deriveCard } = await import("../src/lite-agent/card.mjs");
+test("card 扩展字段：x-novoard-notify 随 skill 声明通过 hub 校验（card 派生由 agent 仓承载）", async () => {
   const { createFrameValidator } = await import("../src/frames.mjs");
   const validate = createFrameValidator();
-  const card = deriveCard({
-    agentId: "mac-work",
-    targets: {
-      "smoke-test": { title: "冒烟", expose: "a2a", audit: "summary", requiresApproval: false, notify: "on-failure", steps: [{ script: "echo ok" }] },
-    },
-  });
+  const card = {
+    name: "mac-work",
+    description: "工位 Mac · dev builder",
+    version: "1.0.0",
+    capabilities: { streaming: false, pushNotifications: true },
+    defaultInputModes: ["text"],
+    defaultOutputModes: ["text", "file"],
+    skills: [
+      { id: "smoke-test", name: "冒烟", description: "echo ok", tags: ["t"], "x-novoard-notify": "on-failure" },
+    ],
+  };
   assert.equal(validate.agentCard(card).ok, true);
   assert.equal(card.skills[0]["x-novoard-notify"], "on-failure");
 });
