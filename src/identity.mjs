@@ -269,7 +269,7 @@ export async function createIdentityStore({
     const user = identity.users.find((candidate) => candidate.id === pat.userId);
     if (!user || user.disabled || user.securityVersion !== pat.securityVersion) return null;
     if (!pat.lastUsedAt || now() - Date.parse(pat.lastUsedAt) >= PAT_TOUCH_INTERVAL_MS) {
-      void touchPat(pat.id);
+      await touchPat(pat.id);
     }
     return principalFor({ kind: "pat", user, identity, pat });
   }

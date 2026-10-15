@@ -170,6 +170,9 @@ test("PAT：只存哈希、scope 不可越权、吊销和用户禁用立即生�
     assert.doesNotMatch(readFileSync(store.files.identityFile, "utf8"), new RegExp(issued.token));
     const patPrincipal = await store.authenticatePat(issued.token);
     assert.deepEqual(patPrincipal.permissions.sort(), ["system.read", "tasks.read"]);
+    const persistedPat = JSON.parse(readFileSync(store.files.identityFile, "utf8"))
+      .pats.find((pat) => pat.id === issued.pat.id);
+    assert.ok(persistedPat.lastUsedAt, "PAT 认证返回前应完成已节流的 lastUsedAt 写入");
 
     await store.revokePat(principal, issued.pat.id);
     assert.equal(await store.authenticatePat(issued.token), null);
