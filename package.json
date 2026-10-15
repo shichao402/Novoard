@@ -1,6 +1,6 @@
 {
   "name": "novoard-hub",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
   "description": "Novoard hub：联邦注册表 + 任务队列 + A2A 端点 + 隧道（契约 SSOT；agent 见 novoard-agent 仓）",
