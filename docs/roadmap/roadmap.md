@@ -92,6 +92,15 @@
 - [x] F3 mac-home 切二进制：agent 仓 SCHEMA_DIR 修复（commit 681c01b，指向 src/contract/schemas）+ tag v0.1.1 触发四平台 CI；官方 node v22.23.3 darwin-x64 作 SEA 基底本机打包（110.7MB）；launchd plist 切二进制入口 + 定义目录迁移（agents/mac-home/ 含 targets.yaml+templates 迁入数据目录，agent.json/state 不动）；线上验证全绿：hub 聚合 card 含 mac-home 全部四 target（在线注册）、面板/编辑器 200、v0.2.1 修复生效、磁贴触发 smoke-test → completed（本地闭环）+ 重放队列 0 积压
 - [x] F4 收尾：hub 仓 roadmap 记账、双 Release 产物验证、win-dev 升级 v0.2.1 指引；hub 仓 lite-agent 移除（用户拍板"现在就移除"）：`src/lite-agent/`、`scripts/build-agent.mjs`、SEA 打包 workflow、esbuild/postject devDeps 全部退役；hub 测试外科手术——e2e 改契约级 fakeAgent（notify-rules）、agent-runtime 单元块与 deriveCard 透传测试摘除（agent 仓已覆盖）、离线扩展字段测试改 hub 侧 schema 校验形态；契约门禁重写为 SSOT 自检（schema 合法性 + frames 行为样例，跨仓漂移防线在 agent 仓门禁）；55/55 绿。hub 仓收敛为纯服务端：注册表/队列/隧道/A2A/通知/规则/dashboard + 契约 SSOT
 
+## M7+ · 运行期收口（2026-10-15）
+
+M7 拆仓后运行期清理与验收面收口，一轮完成四件事：
+
+- [x] intranet-weekly 成员退役（用户决策"删了，功能由 novoard-agent 覆盖"）：重庆 CVM 停服禁用删 unit、/opt/novoard-lite 与专装 node20 全清；审计/replay/配置/targets 归档 docs/archive/intranet-weekly-retired/；hub 侧 fleet 定义、secrets token（线上+本地）同步删除；ADR-0003 内网出站隧道结论沉淀文档不变，重建路径 = 任意内网机器下载 linux-x64 二进制跑向导（架构验证过的运维动作）
+- [x] mac-work 常驻化（照 mac-home 模板）：数据目录 ~/Library/Application Support/novoard/agent-mac-work/（agent.json 0600 + 独立端口 39872 + 定义迁移）+ launchd plist；实测暴露 skill 命名空间全局唯一设计约束——M1"两台 Mac 同 id"设计在联邦唯一命名下不成立，mac-work 改 dev-build-investm-work（commit 9217b5f，测试断言同步）
+- [x] AC2 IM 审批恢复收口（M4 最后验收面）：bot 新增 approve/reject <taskId> 语法 → /a2a tasks/approve（clientKeys 池鉴权，与面板/磁贴同一状态机零旁路）；线上端到端验收 approval-demo：input-required → approve → working → completed 全链（commit a2b6cc3，测试 56/56）
+- [x] agent 仓 win32 CI 修复：check-contract-copy.mjs 动态 import 裸 Windows 路径被解析为 d: 协议致 contract-gate 失败 → pathToFileURL（commit f77b1db，v0.1.2）；win32-x64 产物已挂 Release，win-dev 升级通道恢复；macos-13 darwin-x64 runner 稀缺排队中会自动补挂
+
 ## 里程碑之外（暂不排期）
 
 - cronkit Windows 机器收编为成员（属"收编"非"试点"，规模另立，见 research 0004）
