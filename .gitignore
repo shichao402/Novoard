@@ -1,4 +1,8 @@
 # 本地运行态（hub 数据卷，不进 git）
 .state/
 node_modules/
+web/node_modules/
+web/dist/
+web/playwright-report/
+web/test-results/
 *.local.json

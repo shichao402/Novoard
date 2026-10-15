@@ -1,79 +1,94 @@
-# CVM 部署 runbook（M1 · PRD-5 部署形态）
+# CVM 全新安装 runbook
 
-目标机：腾讯云公有云广州 CVM `43.138.156.146`（实例 `ins-78r3y0si`，TencentOS 4，2C2G，200M 按流量计费，2028-10 到期）。
-形态：Docker 单容器 + 宿主机 nginx 子目录反代（PRD-2 F5）；hub 端口仅绑 127.0.0.1，不暴露公网端口。
+生产地址固定为 `https://novoard.firoyang.com/`。Hub 使用 Docker 单容器，宿主机 nginx 将该域名的根路径反代到 `127.0.0.1:38666`；API、管理控制台和 `/tunnel` 共用此入口。
 
-## 〇、架构约束（先读）
+本版本只支持全新安装：不要复制旧 `dashboardToken`、`clientKeys`、`agentTokens`、`.state/acl.yaml`、queue/audit/artifacts 或旧 identity 状态，也不承诺用旧镜像读取新 `.state`。
 
-hub-and-spoke 拓扑要求 hub 对所有 agent 出站可达。目标机为公网机，四个成员全通：
+## 1. 前置条件
 
-- mac-work（办公 Mac）：办公网 → 公网 ✅
-- mac-home（家庭 Mac）：家庭宽带 → 公网 ✅
-- intranet-weekly（内网服务器）：内网 → 公网 ✅（出站 HTTPS 即可）
-- iOS 蜂窝网络：✅（`https://novoard.firoyang.com/api/trigger`）
+- DNS 与有效 HTTPS 证书已配置；
+- Docker 28+、Compose 2.32+、nginx 1.26+；
+- 防火墙不开放 38666，只有 nginx 对公网；
+- 部署者准备在服务上线后立即完成 first-claim。
 
-机器既有业务：`tasker` / `vikunja` / `board` 三个 `firoyang.com` 子域（nginx 1.26.3 + acme.sh 自管 Let's Encrypt 证书）。novoard 以子目录 `location /novoard/` 并入既有 nginx，不新开 server 块。
-
-## 一、前置
-
-- 登录方式（已解决）：`ssh -p 22 -i ~/.ssh/pkv_tencent_cvm root@43.138.156.146`（root 免密）
-- Docker 28.4 + Compose 2.32 已装；nginx 1.26 active
-- 代码分发：`rsync` 直传（见下）
-- HTTPS（已完成）：DNS `novoard.firoyang.com → 43.138.156.146`（DNSPod recordId 2429632391）；证书 certbot webroot 签发（Let's Encrypt，2027-01-11 到期），80 块 ACME 验证 + 301，443 反代 127.0.0.1:38666
-
-## 二、hub 容器
+## 2. 分发并启动
 
 ```bash
-# Mac 上分发
-rsync -az --delete --exclude .state --exclude .git --exclude node_modules \
-  /Users/firoyang/workspace/Novoard/ root@43.138.156.146:/opt/novoard/
-# 带上 secrets（单独传，不进 rsync 主体的 .state）
-rsync -az /Users/firoyang/workspace/Novoard/deploy/.state/ root@43.138.156.146:/opt/novoard/.state/
+# 开发机：只分发源码，不分发任何运行态或真实密钥
+rsync -az --delete \
+  --exclude .git --exclude node_modules --exclude web/node_modules \
+  --exclude .state --exclude deploy/.state \
+  /Users/firoyang/workspace/Novoard/ \
+  root@43.138.156.146:/opt/novoard/
 
-# 目标机上
+# 服务器：创建全新私密状态卷并构建
 cd /opt/novoard/deploy
+install -d -m 700 .state
 docker compose up -d --build
-curl -s http://127.0.0.1:38666/.well-known/agent-card.json | head -5
+curl -fsS http://127.0.0.1:38666/api/setup/status
+# 预期：{"required":true}
 ```
 
-secrets 已生成（2026-10-13，`deploy/.state/secrets.json`，600 权限、gitignore 验证不入库）：agentTokens × 3（mac-work / mac-home / intranet-weekly）、clientKeys × 1、dashboardToken × 1。三个 `agents/*/agent.local.json` 已同步配好（hubUrl 占位 `<hub-host>`，部署后回填）。
+镜像会在第一阶段构建 React/Ant Design Pro 控制台，再把 `web/dist` 与原生 Node Hub 放入运行镜像。运行态位于 `deploy/.state`，其中 identity、sessions、secrets、queue、audit、artifacts 均不得提交仓库。
 
-## 二·五、agent 侧接入
+## 3. nginx 根路径
 
-agent 已拆分至独立仓 novoard-agent（M7），各成员用 Release 二进制接入（setup 向导填 hub 地址 + agentId + token，或直接落 agent.json）。历史源码形态（`NOVOARD_AGENT_DIR=agents/mac-work node src/lite-agent/main.mjs`）已随 src/lite-agent 移除退役。
-
-## 三、nginx + HTTPS（子目录并入既有 server 块）
+将 `deploy/nginx-novoard.conf` 的 `location /` 放进 `novoard.firoyang.com` 的 HTTPS `server {}`。WebSocket Upgrade 使用宿主机已有的 `$connection_upgrade` map。
 
 ```bash
-cp deploy/nginx-novoard.conf /etc/nginx/conf.d/novoard.location.conf.snippet
-# include 进既有 tasker/vikunja 同款 443 server 块（novoard.firoyang.com 单独 server_name 亦可）
 nginx -t && systemctl reload nginx
+curl -I https://novoard.firoyang.com/
 ```
 
-## 四、验证链
+不再配置 `/novoard/` 子路径；Cookie Path、Vite base、React Router 路由、API 与 artifact URL 都是 `/`。
+Compose 中 `NOVOARD_TRUST_PROXY=1` 只适用于当前“容器端口仅绑定宿主机 127.0.0.1、唯一入口为本机 nginx”的拓扑，用于按真实 `X-Real-IP` 做登录限速；若直接暴露 Hub 端口，必须删除该配置。
 
-1. `curl -s http://127.0.0.1:38666/.well-known/agent-card.json` → 聚合 card（skills 空数组）
-2. agent（novoard-agent 二进制）启动 → 注册进 card、audit 出现 working
-3. 磁贴门（docs/guides/macos-tile-trigger.md）：trigger → 202 submitted（公网 HTTPS，桌面磁贴/终端脚本/Shortcuts App 三形态）
-4. 规则链路：trigger dev-build-investm → completed → smoke-test 自动入队（rules.yaml 放 .state）
+## 4. 立即认领首位超级管理员
 
-## 五、回滚
+打开 `https://novoard.firoyang.com/`，初始化向导会要求用户名、显示名和强口令，并自动绑定内置 `superadmin`。
+
+这是公开 first-claim：第一个成功提交者就是超级管理员。初始化成功后入口永久关闭；不要让空实例在公网无人值守。可验证：
 
 ```bash
-docker compose down   # .state 卷保留全部审计/队列/secrets，容器可随时重建
+curl -fsS https://novoard.firoyang.com/api/setup/status
+# 预期：{"required":false}
 ```
 
-## 待决事项
+## 5. 接入 Agent 与机器客户端
 
-- ~~登录方式~~ 已解决：`~/.ssh/pkv_tencent_cvm`（dec 同步的密钥）
-- ~~DNS 记录~~ 已建：recordId 2429632391
-- 企微 bot：已配置（2026-10-13）。新版智能机器人（API 模式长连接），凭据 `wecomBotId` / `wecomBotSecret` 落服务器 `deploy/.state/secrets.json`，hub 进程内 SDK（`@wecom/aibot-node-sdk`）出站 wss，无入站端口。通知投递目标 `wecomChatId` 由 bot 从首条消息热学习（在企微里给 bot 发一条消息即可）。触发语法：`run <target>[@<member>]`。
+1. 以超级管理员进入“成员”页，为每个 `agentId` 创建 Agent 凭据；`nva_…` 明文只显示一次。
+2. 在 novoard-agent 2.x 的向导中填写根地址、同一 `agentId` 与该 token。Hub 只接受契约 2.x，Bearer 身份必须与 hello `agentId` 一致。
+3. 在“个人访问令牌”页为快捷指令、AI 客户端等分别创建具名 PAT；按最小 scope 与 target allow/deny 配置。`nvp_…` 明文同样只显示一次。
+4. 不得把用户 PAT 当 Agent token，也不得让机器客户端共用超级管理员会话。
 
-## 部署实录（2026-10-13）
+## 6. 企微
 
-已完成：DNS → rsync → 容器（127.0.0.1:38666）→ certbot 证书 → nginx 443 → 公网全链路验证。
-e2e 闭环已通：mac-work 注册 → trigger（HTTPS）→ agent 执行 → completed 终态回传 → 双侧审计对账。
+超级管理员在“企微”页配置 bot 凭据、固定通知会话、允许的用户和群聊。白名单默认为空，空列表拒绝所有 run/approve；群聊同时要求 sender 与 chat 命中。
 
-mac-home 接入（2026-10-13，与 mac-work 同机双实例，用户决策）：配置与 state 独立目录 `~/Library/Application Support/novoard/agent-mac-home/`（agent.json 0600 + audit），launchd 常驻 `com.firoyang.novoard.agent.mac-home`（RunAtLoad + KeepAlive），环境变量 `NOVOARD_AGENT_DIR=/Users/firoyang/workspace/Novoard/agents/mac-home`。验证：task-20261013-001 公网触发真实执行，working→failed（InvestM 未提交改动，真实仓库状态），双侧审计一致。家里 Mac 到位后改 repoDir + agentDir 即可迁移。
-部署中修复三个缺陷：secrets.mjs 对象形态归一化、agent 配置 contractVersion（v1.0→1.0）、runner script 步骤插值缺失（均带回归测试）。
-运维注意：nginx WS 升级用 `00-novoard-map.conf` 的 map 变量；certbot 续期依赖既有 systemd timer；磁盘 83% 水位需留意。
+启用后创建不可登录的 `wecom-bot` 服务账号，并通过“轮换服务 PAT”执行“签发验证新令牌 → 切换消费端 → 吊销旧令牌”。真实 sender/chat/command 会进入安全审计。
+
+## 7. Break-glass
+
+忘记超级管理员口令时，只能在服务器 TTY 内恢复一个已经存在的 superadmin：
+
+```bash
+cd /opt/novoard/deploy
+docker compose exec -it novoard-hub node src/admin.mjs recover <username>
+```
+
+口令通过 TTY 输入，不进 argv。恢复会递增安全版本并吊销该账号全部会话和 PAT；该命令不能创建用户、授予 superadmin 或重新开启 setup。
+
+## 8. 验证与备份
+
+```bash
+curl -fsS https://novoard.firoyang.com/.well-known/agent-card.json
+docker compose logs --tail=100 novoard-hub
+```
+
+再从控制台完成一次 target 触发、任务终态、artifact 下载和审计查询。备份时停止容器并整体备份 `deploy/.state`；恢复必须使用同版本镜像与完整目录，不能只恢复 identity 或 install 单文件。
+
+```bash
+docker compose down
+tar -C /opt/novoard/deploy -czf /root/novoard-state-$(date +%F).tgz .state
+docker compose up -d
+```

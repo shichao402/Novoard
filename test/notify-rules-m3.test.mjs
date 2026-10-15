@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { createNotify } from "../src/notify.mjs";
 import { createHub } from "../src/main.mjs";
+import { bootstrapTestAuth } from "./test-auth.mjs";
 
 function tmpStateDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m3-"));
@@ -117,7 +118,7 @@ test("hub 装配：webhook 入口鉴权 + 规则联动 webhook-source → run ta
   writeFileSync(join(rulesDir, "rules.yaml"), `rules:\n  - when: { event: webhook-deploy-notify }\n    then: { target: smoke-test }\n`);
   const hub = await createHub({ stateDir: join(stateDir, "hub"), rulesPath: join(rulesDir, "rules.yaml"), port: 0, offlineSweepMs: 60_000 });
   const port = hub.server.address().port;
-  hub.secrets.set({ clientKeys: ["with-key-abc123"], dashboardToken: "dash-pass-123456", agentTokens: ["agt_test_token_12345678"] });
+  const auth = await bootstrapTestAuth(hub);
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD() });
     hub.registry.markOffline("mac-work"); // 离线：规则动作走离线分流（smoke-test 无 offline 标注 → reject），验证链路而非成功执行
@@ -129,7 +130,7 @@ test("hub 装配：webhook 入口鉴权 + 规则联动 webhook-source → run ta
     // 带鉴权：受理 + 审计 + 规则触发（离线 → rejected 审计）
     res = await fetch(`http://127.0.0.1:${port}/api/webhook/deploy-notify`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({ action: "deploy-done", version: "1.2.3" }),
     });
     assert.equal(res.status, 202);
@@ -137,7 +138,7 @@ test("hub 装配：webhook 入口鉴权 + 规则联动 webhook-source → run ta
     assert.equal(body.accepted, true);
     await new Promise((r) => setTimeout(r, 80));
     const events = hub.audit.list();
-    assert.ok(events.some((e) => e.actor === "webhook:deploy-notify" && e.outcome === "accepted"));
+    assert.ok(events.some((e) => e.actor === `pat:test-owner/${auth.pat.name}` && e.outcome === "accepted" && e.detail?.source === "deploy-notify"));
     assert.ok(events.some((e) => e.actor === "rule-engine" && e.target === "smoke-test" && e.outcome === "rejected" && e.detail?.reason === "member-offline"));
   } finally {
     await new Promise((r) => hub.server.close(r));

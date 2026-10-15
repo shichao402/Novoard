@@ -3,20 +3,84 @@
  * - 通道：@wecom/aibot-node-sdk 长连接（出站 wss → openws.work.weixin.qq.com，无入站端口，ADR-0003 出站拓扑）
  * - 触发端：message.text → 固定语法 `run <target>[@<member>]`（零 LLM，ADR-0004 纪律延伸至 bot）
  *   → POST 本地 /api/trigger 复用人类门全链路（查表/审计/离线拒绝/通知扇出，零旁路）
- * - 通知面：sendMessage(chatid, markdown) 主动推送；chatid 从首条消息热学习并持久化（secrets.wecomChatId）
+ * - 通知面：sendMessage(chatid, markdown) 主动推送；通知目标只能由管理员固定配置
+ * - 默认拒绝：单聊校验 sender，群聊同时校验 sender + chat；run/approve/reject 均使用服务 PAT
  * - 热配置：凭据变更（dashboard secrets.set）下次 ensure 自动断开重连
  * - 未配置凭据或 SDK 未安装 → 全部降级 no-op / false，不影响 hub 主流程（通知失败不阻塞，PRD-3 NFR）
  * - 依赖注入：sdkFactory（默认动态 import 官方 SDK）、fetchImpl 供测试替换
  */
-export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl = fetch } = {}) {
+import { createHash } from "node:crypto";
+
+export function createWecomBot({
+  secrets,
+  log = console,
+  sdkFactory,
+  fetchImpl = fetch,
+  auditCommand = () => {},
+} = {}) {
   let client = null; // SDK WSClient 实例
-  let startedKey = ""; // 已启动的凭据指纹（botId + secret 前 6 位）
+  let startedKey = ""; // 已启动的不可逆凭据指纹
   let localPort = 0; // hub 本地端口（attach 后生效，触发转发用）
   let ensurePromise = null; // ensure 并发去重锁
 
   function chatOf(frame) {
     const body = frame?.body ?? {};
     return body.chattype === "group" ? body.chatid : body.from?.userid;
+  }
+
+  function commandContext(frame, command) {
+    const body = frame?.body ?? {};
+    return {
+      senderUserId: String(body.from?.userid ?? "").trim(),
+      chatId: String(chatOf(frame) ?? "").trim(),
+      chatType: body.chattype === "group" ? "group" : "single",
+      command: String(command ?? "").slice(0, 256),
+    };
+  }
+
+  function authorizeCommand(context) {
+    const allowedUsers = new Set(secrets.get("wecomAllowedUserIds"));
+    if (!context.senderUserId || !allowedUsers.has(context.senderUserId)) return "sender-not-allowed";
+    if (context.chatType === "group") {
+      const allowedChats = new Set(secrets.get("wecomAllowedChatIds"));
+      if (!context.chatId || !allowedChats.has(context.chatId)) return "chat-not-allowed";
+    }
+    return "";
+  }
+
+  async function recordCommand(context, authorized, reason) {
+    try {
+      await auditCommand({ ...context, authorized, reason });
+    } catch (error) {
+      log.error?.(`[wecom-bot] 指令审计失败：${error.message}`);
+    }
+  }
+
+  function serviceHeaders(context) {
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${secrets.get("wecomServicePat")}`,
+      "X-Novoard-WeCom-Sender": context.senderUserId,
+      "X-Novoard-WeCom-Chat": context.chatId,
+      "X-Novoard-WeCom-Command": context.command,
+    };
+  }
+
+  async function authorizeOrReply(frame, command) {
+    const context = commandContext(frame, command);
+    const reason = authorizeCommand(context);
+    if (reason) {
+      await recordCommand(context, false, reason);
+      await safeReply(frame, "**⛔ Novoard 拒绝**\n> 当前企微用户或会话不在管理员白名单中");
+      return null;
+    }
+    if (!secrets.get("wecomServicePat")) {
+      await recordCommand(context, false, "service-pat-missing");
+      await safeReply(frame, "**⚠️ Novoard 未配置完成**\n> 请管理员创建或轮换企微服务 PAT");
+      return null;
+    }
+    await recordCommand(context, true, "allowlist-passed");
+    return context;
   }
 
   async function doEnsure() {
@@ -31,7 +95,7 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
       }
       return null;
     }
-    const key = `${botId}:${botSecret.slice(0, 6)}`;
+    const key = createHash("sha256").update(`${botId}\0${botSecret}`).digest("hex");
     if (client && startedKey === key) return client;
     if (client) {
       try { client.disconnect(); } catch { /* 忽略 */ }
@@ -76,21 +140,17 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
 
   async function onText(frame) {
     const text = String(frame?.body?.text?.content ?? "").trim();
-    // chatid 热学习：单聊记 userid，群聊记 chatid；变化才落盘（重启不丢）
-    const chat = chatOf(frame);
-    if (chat && secrets.get("wecomChatId") !== chat) {
-      secrets.set({ wecomChatId: String(chat) });
-      log.info?.(`[wecom-bot] 通知投递目标已学习并持久化：${String(chat).slice(0, 12)}…`);
-    }
 
     const match = text.match(/^run\s+([a-z0-9][a-z0-9-]*)(?:@([a-z0-9][a-z0-9-]*))?$/i);
     if (match) {
+      const context = await authorizeOrReply(frame, text);
+      if (!context) return;
       const [, target, member] = match;
       let res;
       try {
         res = await fetchImpl(`http://127.0.0.1:${localPort}/api/trigger`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: serviceHeaders(context),
           body: JSON.stringify(member ? { target, member } : { target }),
         });
       } catch (error) {
@@ -113,12 +173,14 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
     // 审批门（M4 AC2）：approve/reject <taskId> → tasks/approve 端点（与面板/磁贴同一状态机，零旁路）
     const approval = text.match(/^(approve|reject)\s+(task-[a-z0-9-]+)$/i);
     if (approval) {
+      const context = await authorizeOrReply(frame, text);
+      if (!context) return;
       const [, decision, taskId] = approval;
       let res;
       try {
         res = await fetchImpl(`http://127.0.0.1:${localPort}/a2a`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${secrets.get("clientKeys")?.[0] ?? ""}` },
+          headers: serviceHeaders(context),
           body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: "tasks/approve", params: { id: taskId, decision } }),
         });
       } catch (error) {
@@ -170,13 +232,13 @@ export function createWecomBot({ secrets, log = console, sdkFactory, fetchImpl =
     async start() {
       return ensure();
     },
-    /** 主动推送（notify 扇出调用）：markdown 文本 → 企微会话。false = 未配置/未学习/失败，调用方自行降级。 */
+    /** 主动推送（notify 扇出调用）：markdown 文本 → 管理员固定的企微会话。 */
     async push({ markdown }) {
       const c = await ensure();
       if (!c) return false;
-      const chat = secrets.get("wecomChatId");
+      const chat = secrets.get("wecomNotifyChatId");
       if (!chat) {
-        log.info?.("[wecom-bot] wecomChatId 未学习（在企微里给 bot 发一条消息即可），本次通知降级");
+        log.info?.("[wecom-bot] wecomNotifyChatId 未配置，本次通知降级");
         return false;
       }
       try {

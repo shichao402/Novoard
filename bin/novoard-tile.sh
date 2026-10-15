@@ -7,6 +7,14 @@
 HUB_URL="${NOVOARD_HUB_URL:-https://novoard.firoyang.com}"
 TARGET="${NOVOARD_TARGET:-dev-build-investm}"
 MEMBER="${NOVOARD_MEMBER:-}"   # 缺省=查表自动选在线成员
+PAT_FILE="${NOVOARD_PAT_FILE:-${HOME}/.config/novoard/pat}"
+PAT="${NOVOARD_PAT:-}"
+[ -z "${PAT}" ] && [ -r "${PAT_FILE}" ] && PAT=$(cat "${PAT_FILE}")
+
+if [ -z "${PAT}" ]; then
+  osascript -e 'display notification "缺少具名 PAT；请配置 ~/.config/novoard/pat" with title "Novoard 磁贴"'
+  exit 1
+fi
 
 # ── 触发（fire-and-forget）─────────────────────────────
 BODY="{\"target\":\"${TARGET}\""
@@ -16,7 +24,11 @@ BODY="${BODY}}"
 RESP=$(curl -s -w '\n%{http_code}' --max-time 10 \
   -X POST "${HUB_URL}/api/trigger" \
   -H 'Content-Type: application/json' \
-  -d "${BODY}")
+  -d "${BODY}" \
+  --config - <<EOF
+header = "Authorization: Bearer ${PAT}"
+EOF
+)
 
 HTTP=$(echo "${RESP}" | tail -1)
 JSON=$(echo "${RESP}" | sed '$d')

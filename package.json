@@ -1,6 +1,6 @@
 {
   "name": "novoard-hub",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Novoard hub：联邦注册表 + 任务队列 + A2A 端点 + 隧道（契约 SSOT；agent 见 novoard-agent 仓）",
@@ -10,8 +10,15 @@
   "scripts": {
     "start": "node src/main.mjs",
     "dev": "node --watch src/main.mjs",
+    "admin": "node src/admin.mjs",
     "contract-gate": "node scripts/check-contract-copy.mjs",
-    "test": "npm run contract-gate && node --test \"test/*.mjs\""
+    "build:web": "npm --prefix web run build",
+    "lint:web": "npm --prefix web run lint",
+    "typecheck:web": "npm --prefix web run typecheck",
+    "test:web": "npm --prefix web run test",
+    "test:e2e": "npm --prefix web run test:e2e",
+    "test": "npm run contract-gate && node --test \"test/*.mjs\"",
+    "test:all": "npm test && npm run build:web && npm run typecheck:web && npm run lint:web && npm run test:web && npm run test:e2e"
   },
   "dependencies": {
     "@wecom/aibot-node-sdk": "^1.0.7",

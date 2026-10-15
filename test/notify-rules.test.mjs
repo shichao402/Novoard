@@ -13,6 +13,7 @@ import { createNotify } from "../src/notify.mjs";
 import { createRules } from "../src/rules.mjs";
 import { createSecrets } from "../src/secrets.mjs";
 import { createHub } from "../src/main.mjs";
+import { bootstrapTestAuth, configureTestAgentTokens } from "./test-auth.mjs";
 import { WebSocket } from "ws";
 
 function tmpDir() {
@@ -25,7 +26,7 @@ function fakeAgent({ port, token, card, driver }) {
   ws.on("open", () => {
     ws.send(JSON.stringify({
       v: 1, kind: "ops", msgId: "e-hello-rules-e2e", ts: new Date().toISOString(),
-      body: { type: "agent.hello", contractVersion: "1.0", agentId: "mac-work", token, card, inFlightTaskIds: [] },
+      body: { type: "agent.hello", contractVersion: "2.0", agentId: "mac-work", card, inFlightTaskIds: [] },
     }));
   });
   ws.on("message", (raw) => {
@@ -125,7 +126,8 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
     then: { target: smoke-test }
 `);
   const hub = await createHub({ stateDir: hubDir, port: 0, rulesPath, log: { info: () => {}, error: () => {}, warn: () => {} } });
-  hub.secrets.set({ agentTokens: ["agt_rule_e2e_123456"], dashboardToken: "dash-pass-123456" });
+  configureTestAgentTokens(hub, { "mac-work": "agt_rule_e2e_123456" });
+  const auth = await bootstrapTestAuth(hub);
   const port = hub.server.address().port;
   let agent = null;
   try {
@@ -144,7 +146,7 @@ test("规则端到端：dev-build completed → smoke-test 自动入队并下发
     // 触发 dev-build → completed → 规则触发 smoke-test → 自动执行到终态
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     const { taskId } = await res.json();

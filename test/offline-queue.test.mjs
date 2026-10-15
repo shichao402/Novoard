@@ -18,6 +18,7 @@ import { createTaskQueue } from "../src/queue.mjs";
 import { createRegistry } from "../src/registry.mjs";
 import { createFrameValidator } from "../src/frames.mjs";
 import { createHub } from "../src/main.mjs";
+import { bootstrapTestAuth, configureTestAgentTokens } from "./test-auth.mjs";
 
 function tmpStateDir() {
   return mkdtempSync(join(tmpdir(), "novoard-m2-"));
@@ -60,13 +61,15 @@ function cardWithSkill(skill) {
   };
 }
 
-async function bootHub({ agentTokens = ["agt_test_token_12345678"] } = {}) {
+async function bootHub({ agentTokens = { "mac-work": "agt_test_token_12345678" } } = {}) {
   const stateDir = tmpStateDir();
   const hub = await createHub({ stateDir, port: 0, offlineSweepMs: 50 });
   const port = hub.server.address?.()?.port;
-  hub.secrets.set({ agentTokens, dashboardToken: "dash-pass-123456", clientKeys: ["with-key-abc123"] });
+  configureTestAgentTokens(hub, agentTokens);
+  const auth = await bootstrapTestAuth(hub);
   return {
     hub,
+    auth,
     port,
     stateDir,
     close: () => new Promise((resolve) => hub.server.close(resolve)),
@@ -128,13 +131,13 @@ test("card 扩展字段：x-novoard-offline 随 skill 声明通过 hub 校验（
 });
 
 test("HTTP 门：offline reject（默认）行为不变", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD_REJECT });
     hub.registry.markOffline("mac-work");
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     assert.equal(res.status, 202);
@@ -149,7 +152,7 @@ test("HTTP 门：offline reject（默认）行为不变", async () => {
 });
 
 test("HTTP 门：offline queue 离线入队 + 成员上线自动补下发", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD_QUEUE });
     hub.registry.markOffline("mac-work");
@@ -157,7 +160,7 @@ test("HTTP 门：offline queue 离线入队 + 成员上线自动补下发", asyn
     // 离线触发 → queued-offline + expiresAt
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     assert.equal(res.status, 202);
@@ -188,7 +191,7 @@ test("HTTP 门：offline queue 离线入队 + 成员上线自动补下发", asyn
 });
 
 test("HTTP 门：offline queue TTL 到期 sweeper 转 failed", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     // ttl 1s：入队后 1s 到期，sweep 间隔 50ms
     hub.registry.register({
@@ -205,7 +208,7 @@ test("HTTP 门：offline queue TTL 到期 sweeper 转 failed", async () => {
 
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     const body = await res.json();
@@ -224,13 +227,13 @@ test("HTTP 门：offline queue TTL 到期 sweeper 转 failed", async () => {
 });
 
 test("A2A 门：offline queue 离线受理返回 task 对象", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   try {
     hub.registry.register({ agentId: "mac-work", card: CARD_QUEUE });
     hub.registry.markOffline("mac-work");
     const res = await fetch(`http://127.0.0.1:${port}/a2a`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer with-key-abc123" },
+      headers: auth.headers,
       body: JSON.stringify({
         jsonrpc: "2.0",
         id: "req-1",
@@ -248,7 +251,7 @@ test("A2A 门：offline queue 离线受理返回 task 对象", async () => {
 });
 
 test("隧道 hello 钩子：上线补下发真实 WS 路径", async () => {
-  const { hub, port, stateDir, close } = await bootHub();
+  const { hub, auth, port, stateDir, close } = await bootHub();
   let ws = null;
   try {
     const { WebSocket } = await import("ws");
@@ -258,7 +261,7 @@ test("隧道 hello 钩子：上线补下发真实 WS 路径", async () => {
     hub.registry.markOffline("mac-work");
     const res = await fetch(`http://127.0.0.1:${port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     const { taskId } = await res.json();
@@ -271,7 +274,7 @@ test("隧道 hello 钩子：上线补下发真实 WS 路径", async () => {
     await new Promise((r) => ws.once("open", r));
     ws.send(JSON.stringify({
       v: 1, kind: "ops", msgId: "e-1", ts: new Date().toISOString(),
-      body: { type: "agent.hello", contractVersion: "1.1", agentId: "mac-work", token: "agt_test_token_12345678", card: CARD_QUEUE, inFlightTaskIds: [] },
+      body: { type: "agent.hello", contractVersion: "2.0", agentId: "mac-work", card: CARD_QUEUE, inFlightTaskIds: [] },
     }));
     // hello.ack + 补下发的 message/send 委派帧都应到达
     await waitFor(() => received.some((f) => f.body?.type === "agent.hello.ack"));
@@ -311,7 +314,7 @@ test("重启重放：queued-offline 恢复，owner 在线立即补下发", async
     boot1.hub.registry.markOffline("mac-work");
     const res = await fetch(`http://127.0.0.1:${boot1.port}/api/trigger`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: boot1.auth.headers,
       body: JSON.stringify({ target: "dev-build-investm" }),
     });
     const { taskId } = await res.json();
@@ -320,7 +323,7 @@ test("重启重放：queued-offline 恢复，owner 在线立即补下发", async
     await boot1.close();
     // 复制 state 到受控目录（bootHub 每次新建 tmp，这里直接用 boot1.stateDir 重新 boot）
     const boot2 = await createHub({ stateDir: boot1.stateDir, port: 0, offlineSweepMs: 50 });
-    boot2.secrets.set({ agentTokens: ["agt_test_token_12345678"], dashboardToken: "dash-pass-123456", clientKeys: ["with-key-abc123"] });
+    configureTestAgentTokens(boot2, { "mac-work": "agt_test_token_12345678" });
     try {
       // owner 离线（重启后无连接）→ 任务保持 queued-offline
       assert.equal(boot2.queue.get(taskId).state, "queued-offline");
