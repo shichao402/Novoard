@@ -23,6 +23,21 @@ async function initializedStore() {
   return { stateDir, store, setup, owner };
 }
 
+test("口令强度：10 位允许，9 位拒绝", async () => {
+  const stateDir = tmpStateDir();
+  try {
+    const store = await createIdentityStore({ stateDir });
+    await assert.rejects(
+      store.setup({ username: "owner", password: "123456789" }),
+      (error) => error.code === "invalid-password",
+    );
+    const setup = await store.setup({ username: "owner", password: "1234567890" });
+    assert.equal(setup.user.roleId, "superadmin");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("全新安装：首个账号原子成为 superadmin，setup 永久关闭", async () => {
   const stateDir = tmpStateDir();
   try {

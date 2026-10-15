@@ -163,7 +163,7 @@ export default function AppLayout() {
             <ProFormText.Password
               name="newPassword"
               label="新口令"
-              rules={[{ required: true, min: 12, max: 256 }]}
+              rules={[{ required: true, min: 10, max: 256 }]}
             />
             <ProFormText.Password
               name="confirmPassword"
@@ -261,7 +261,7 @@ export default function AppLayout() {
             name="newPassword"
             label="新口令"
             fieldProps={{ autoComplete: "new-password" }}
-            rules={[{ required: true, min: 12, max: 256 }]}
+            rules={[{ required: true, min: 10, max: 256 }]}
           />
           <ProFormText.Password
             name="confirmPassword"
