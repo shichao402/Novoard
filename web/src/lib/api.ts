@@ -105,6 +105,17 @@ export interface TargetMember {
   skills: TargetSkill[];
 }
 
+export interface TraceEvent {
+  seq: number;
+  type: string;
+  ts: string;
+  taskId: string;
+  index?: number;
+  command?: string;
+  state?: string;
+  last?: { type?: string; index?: number };
+}
+
 export interface Task {
   id: string;
   target: string;
@@ -113,6 +124,7 @@ export interface Task {
   state: string;
   createdAt: string;
   updatedAt: string;
+  trace?: TraceEvent[];
   artifacts?: Array<{
     name: string;
     parts: Array<{ kind: string; uri?: string; text?: string }>;

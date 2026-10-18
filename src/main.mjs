@@ -20,6 +20,8 @@ import { createWecomBot } from "./wecom-bot.mjs";
 import { createRules } from "./rules.mjs";
 import { startServer } from "./server.mjs";
 import { attachTunnel } from "./tunnel.mjs";
+import { parseDuration } from "./duration.mjs";
+import { lostMessage } from "./queue.mjs";
 
 export async function createHub({
   stateDir = join(process.cwd(), ".state"),
@@ -158,9 +160,11 @@ export async function createHub({
       delegate({ task, vars: action.vars ?? {} }).catch((error) => log.error?.(`规则任务下发失败 ${task.id}：${error.message}`));
     }
   };
+  notifyAndRules.pushOwner = (input) => notify.pushOwner(input);
 
   // 审批门恢复钩子（M4 F3）：input-required → 下发 resume 帧 → hub 侧转 working
   function resumeTask({ task }) {
+    if (task?.caller) return false;
     const result = delegate({ task, vars: task.vars, resume: true });
     if (result && typeof result.then === "function") {
       return result.then((r) => {
@@ -173,10 +177,31 @@ export async function createHub({
   }
 
   // 审批门 TTL（M4 F3）：input-required 超时（默认 10 分钟）自动 rejected + 通知
+  function approvalExpired(task, now) {
+    if (task.approvalDeadline) return now >= Date.parse(task.approvalDeadline);
+    return now - Date.parse(task.updatedAt) > approvalTtlMs;
+  }
+
+  function sweepLostTasks() {
+    const now = Date.now();
+    for (const task of queue.list({ state: "working" })) {
+      if (task.caller) continue;
+      const since = registry.offlineSince(task.member);
+      if (!since) continue;
+      const ttlMs = parseDuration(task.limits?.lostTtl ?? "10m") ?? 10 * 60_000;
+      if (now - since < ttlMs) continue;
+      queue.transition(task.id, "failed", { message: lostMessage(task) });
+      audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "failed", detail: { reason: "agent-lost" } }, validate.auditEvent);
+      notify.emit({ event: { kind: "terminal", taskId: task.id, target: task.target, state: "failed", reason: "agent-lost", actor: task.actor, authorization: task.authorization } }).catch(() => {});
+      log.info?.(`[agent-lost] ${task.id} 断开超过 ${task.limits?.lostTtl ?? "10m"}，收成 failed`);
+    }
+  }
+
   function sweepApprovalGate() {
+    const now = Date.now();
     for (const task of queue.list({ state: "input-required" })) {
-      const age = Date.now() - Date.parse(task.updatedAt);
-      if (age > approvalTtlMs) {
+      if (task.caller) continue;
+      if (approvalExpired(task, now)) {
         queue.transition(task.id, "canceled", { message: "approval-ttl-expired" });
         audit.append({ actor: "hub", lane: "a2a", target: task.target, taskId: task.id, outcome: "canceled", detail: { reason: "approval-ttl-expired" } }, validate.auditEvent);
         notify.emit({ event: { kind: "terminal", taskId: task.id, target: task.target, state: "canceled", reason: "approval-ttl-expired" } }).catch(() => {});
@@ -240,6 +265,7 @@ export async function createHub({
   const sweepTimer = setInterval(() => {
     sweepOfflineQueue();
     sweepApprovalGate();
+    sweepLostTasks();
   }, offlineSweepMs);
   sweepTimer.unref?.();
   const identitySweepTimer = setInterval(() => {

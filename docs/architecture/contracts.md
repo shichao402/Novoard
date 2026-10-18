@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.0（v1.1 的 target / A2A 语义保持不变；v2.0 破坏性升级 agent 身份绑定与 artifact 归属：Bearer token 唯一绑定 `agentId`，hello 不再携带 token，artifact 必须绑定 task/member/target 并校验 digest）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.1（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。不带这些字段的 2.0 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.0`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.1`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 本版冻结范围与 defer 清单见 §10
@@ -43,6 +43,10 @@ targets:
 | `notify` | `always` / `on-failure` / `never` | 终态通知扇出策略，定义时决定，运行时查表 |
 | `offline` | `reject` / `queue` | 成员离线时触发策略（M2）：`reject` 拒绝并通知；`queue` 入队带 TTL，成员上线后自动下发，TTL 到期转 failed 并通知。随 card 以 `x-novoard-offline` 透传（§2） |
 | `offlineTtl` | 时长字面（`30m` / `2h` / `1d`） | `offline: queue` 的等待上限，默认 `30m`；到期未上线转 failed，审计记 `offline-ttl-expired` |
+| `concurrency` | 整数 `1`–`32`，默认 `1` | 这个 Target 同时允许的运行数。`1` 表示不能重叠 |
+| `timeout` | 时长字面（`30s` / `10m` / `1h`），默认 `10m` | 单次运行上限，到点停止。随 card 以 `x-novoard-timeout` 透传 |
+| `lostTtl` | 时长字面，默认 `10m` | 成员断开后，超过此时长仍未带着该任务重连，才把 `working` 收成 `failed` / `agent-lost`。与 `timeout` 分开。随 card 以 `x-novoard-lost` 透传。任务进入 `working` 时抄下当时的值，之后改配置不影响这一单 |
+| `approvalTtl` | 时长字面，默认 `10m` | `requiresApproval` 时 `input-required` 的等待上限，到期 `canceled`（`approval-ttl-expired`）。随 card 以 `x-novoard-approval` 透传。进入 `input-required` 时抄下当时的值 |
 
 ### 1.2 steps 语法（契约内部化）
 
@@ -93,8 +97,10 @@ steps:
 }
 ```
 
-- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description = title + vars 参数说明；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）
-- 聚合 card = 当前调用主体 target 范围内的 skills 并集，附同样经过过滤的 `x-novoard-members`（member id → 寻址信息）；端点要求会话或 PAT 的 `targets.read` 权限。skill id 冲突时注册拒绝并回执，先到先得
+- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description 写能力、安排和参数，不只是命令标题；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）。`timeout`、`lostTtl`、`approvalTtl` 分别以 `x-novoard-timeout`、`x-novoard-lost`、`x-novoard-approval` 透传。这些时长在 Agent 的 Target 编辑页调整，Hub 不写死
+- 成员介绍：card 可带 `x-novoard-role`（稳定角色，如 `office-pc`）。`description` 是给其他成员看的自我介绍。对话技能 id 为 `converse`，`x-novoard-kind` 固定为 `agent`。这种技能不进全局 skill 路由表，多台成员可以同时声明；Target id 不能占用 `converse`
+- 聚合 card = 当前调用主体 target 范围内、可点名执行的 skills 并集，附同样经过过滤的 `x-novoard-members`（member id → 寻址信息）；端点要求会话或 PAT 的 `targets.read` 权限。`x-novoard-kind: agent` 的技能不进入聚合 card，也不参与 skill id 冲突。其余 skill id 冲突时注册拒绝并回执，先到先得
+- `GET /api/cards`（Bearer agent token）返回各成员已经推上来的完整 card。调用方按角色和介绍自己筛选，Hub 不替它选择 Target
 - card 经 JWS 签名（A2A 防伪造），密钥管理见 §8
 
 ## 3. ops 帧枚举（旁路车道）
@@ -103,16 +109,18 @@ steps:
 
 | type | 方向 | 载荷 | 说明 |
 | --- | --- | --- | --- |
-| `agent.hello` | agent → hub | agentId、card、contractVersion、在途任务清单 | 注册 / 重连；身份来自 WebSocket Upgrade 的 Bearer token |
+| `agent.hello` | agent → hub | agentId、card、contractVersion、可选 bootId、在途任务清单 | 注册 / 重连；身份来自 WebSocket Upgrade 的 Bearer token |
 | `agent.ping` | 双向 | ts | 心跳 |
 | `telemetry` | agent → hub | cpu/mem/磁盘摘要 | 可选，频率配置 |
 | `card.update` | agent → hub | 新 card | target 定义变更后推送 |
+| `notify.owner` | agent → hub | text | 请 Hub 用现有通知通道把这句话发给主人。不建 task，不进入 ops schema 枚举；身份取连接上的 agentId |
 
 ### 3.1 wire 示例
 
 ```json
-{ "type": "agent.hello", "contractVersion": "2.0", "agentId": "mac-work",
+{ "type": "agent.hello", "contractVersion": "2.1", "agentId": "mac-work",
   "card": { "…": "§2 结构" },
+  "bootId": "6f1c2a40-7b8e-4d3a-9c1e-2a4b6c8d0e1f",
   "inFlightTaskIds": ["task-20261012-001"] }
 ```
 
@@ -130,7 +138,7 @@ steps:
 
 ### 3.2 路由与拒绝规则（ADR-0005）
 
-`type` 在 ops 枚举内 → 旁路车道，不建 task、不进 task 审计（本身可按 `audit` 约定落 ops 日志）；不在枚举、不在 card → 拒绝。`contractVersion` 主版本不匹配 → 拒绝注册，回执 `{ "type": "agent.hello.nack", "reason": "contract-major-mismatch", "hubVersion": "2.0" }`。Bearer token 解析出的身份与 hello `agentId` 不一致 → `agent-identity-mismatch` 并断开；nack 属 hello 的回执语义，非新枚举帧。
+`type` 在 ops 枚举内 → 旁路车道，不建 task、不进 task 审计（本身可按 `audit` 约定落 ops 日志）；不在枚举、不在 card → 拒绝。`notify.owner` 是表里的例外：它在 schema 校验之前处理，只请求现有通知通道。`contractVersion` 主版本不匹配 → 拒绝注册，回执 `{ "type": "agent.hello.nack", "reason": "contract-major-mismatch", "hubVersion": "2.0" }`。Bearer token 解析出的身份与 hello `agentId` 不一致 → `agent-identity-mismatch` 并断开；nack 属 hello 的回执语义，非新枚举帧。
 
 ## 4. 隧道协议（hub ↔ agent）
 
@@ -182,12 +190,30 @@ agent → hub 上行（终态/进度/artifact 走 A2A push notification 形状�
 - A2A 帧语义不变，传输复用隧道（ADR-0004：语义 A2A、传输走隧道——语义对齐到字面，信封自主）
 - hub 对每个 status/artifact 上行重新读取 task，并要求 `task.member === authenticatedAgentId`；跨 member 伪造帧写安全审计、回 nack 并断开连接
 
+### 4.3.1 成员对话
+
+没有 `metadata.lane` 的 `message/send` 仍是 Target 点名，正文是 `run <skillId>`。`metadata.lane = "agent"` 是成员发给成员的自然语言：
+
+- `metadata.to` 是接收方成员 id。`from` 只由 Hub 按连接上的 Agent Token 写入，报文里自带的 `from` 丢掉
+- 接收方的 card 必须有 `x-novoard-kind: agent` 的技能。没有的旧成员收不到这条通道；Hub 回 `rejected` / `peer-unavailable`，不断开发送方
+- 多轮用 Hub 盖上的 `contextId`。对方要补充时上行 `input-required`，下一条同 `contextId` 的 `message/send` 续上。这不是脚本审批，`tasks/approve` 和 `message/resume` 对它无效，审批超时也不会把它取消
+- 上行 `message/notification` 转回这次对话的调用方，可带 text、data，以及已有 artifact 的 file 引用。任务已经终态之后的完成报告和在场信号仍然转发，不断开连接
+
 ### 4.4 断线语义（长任务纪律，dev builder 小时级任务必踩）
 
 1. agent 侧：隧道断开不影响在途任务，继续执行；终态事件本地持久化（本地 JSONL 缓存）
-2. 重连：agent 发 `agent.hello`（带 card、`inFlightTaskIds`），随后按 taskId 重放缓存信封（同 `msgId`）
+2. 重连：agent 发 `agent.hello`（带 card、可选 `bootId`、`inFlightTaskIds`），随后按 taskId 重放缓存信封（同 `msgId`）
 3. hub 侧：按 `msgId` 幂等去重——重复终态直接回 `dedup: true` 的 ack，不重复入审计、不重复通知
-4. hub 重启：队列持久化保证已入队任务不丢（ADR-0006 留白项硬约束）；agent 侧重连后以 hello 对账恢复
+4. hub 重启：队列持久化保证已入队任务不丢（ADR-0006 留白项硬约束）；agent 侧重连后以 hello 对账恢复。Hub 重启后没有旧 `bootId`，不把「对不上」当成进程已死
+5. `bootId` 在进程启动时生成，只放内存，不落盘。不带 `bootId` 的 hello 保持 2.0 行为：不因清单缺失失败，也不自动重发
+6. 带了 `bootId` 时，对该成员名下 `working` / `input-required` 且不是成员对话的任务：清单里有的保持原状态；Hub 不记得上一个 `bootId`，或 `bootId` 没变但不在清单里，视为下行没送到，重新下发；`bootId` 变了又不在清单里，转为 `failed` / `agent-lost`，状态说明带上运行记录的最后一条
+7. 成员一直不回来：Hub 内部约 30 秒扫一次，间隔不进界面。从断开时刻起超过该任务抄下的 `lostTtl`（缺省 `10m`）仍未重连，才把 `working` 收成 `agent-lost`。闪断期间成员已重连的不扫
+
+### 4.5 运行记录（只追溯，不恢复）
+
+每次 Target 运行在 agent 本地追加 `logs/runs/<taskId>.jsonl`。副作用发生前写入并 `fsync`。事件为 `run/start`、`step/start`、`step/end`、`run/end`。链路还在时，同一条事件以 `message/notification` 的 `kind: run-trace` 上行。Hub 追加到 `task.trace`，不因此改变任务状态；`seq` 幂等，终态之后仍可追加。
+
+没有 `run/end` 表示停在最后一条。新进程只把这个尾巴以 `run/truncated` 报上去，不继续跑剩余步骤。记录不参与要不要重跑；终态仍由 `bootId` 对账、`lostTtl` 或原有的 `status-update` 决定。
 
 ## 5. HTTP 门与 A2A 端点（两扇门，ADR-0004）
 
@@ -222,7 +248,7 @@ fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 �
 - `message/stream`：SSE 步骤级进度——订阅 task 状态变更；帧形状 `result: { kind: "status-update"|"artifact-update", taskId, status, final }`；agent 步骤进度以非终态 working 帧（status.message = "step i/n"）透传；15s 心跳注释行保活；连接前已终态则补发快照即关
 - `message/resume`（hub → agent 下行，M4 审批门）：params `{ id, decision: "approve" }`；agent 侧 input-required 挂起 → 恢复执行；拒绝走 `tasks/cancel`
 - `tasks/approve`（A2A 客户端 → hub，M4）：params `{ id, decision: "approve"|"reject" }`；仅 input-required 状态可恢复；三入口（IM AI / 面板 / 磁贴）共用此端点，状态只有一份
-- 审批门 TTL：input-required 挂起超 10 分钟自动 canceled（`approval-ttl-expired`）+ 通知，并向创建任务时绑定的 Agent 下发 `tasks/cancel`；Agent 离线时由 Hub 持久状态在其携带 in-flight 清单重连后补发
+- 审批门 TTL：`input-required` 挂起超过该任务抄下的 `approvalTtl`（缺省 `10m`，Target 上可改）自动 canceled（`approval-ttl-expired`）+ 通知，并向创建任务时绑定的 Agent 下发 `tasks/cancel`；Agent 离线时由 Hub 持久状态在其携带 in-flight 清单重连后补发。旧 agent 未透传该字段时，Hub 仍用自身缺省 `10m`
 - 统一授权：会话与 PAT 都解析为用户主体，按“权限 → target 范围”裁决；PAT 的有效权限和 allow/deny 分别与用户当前角色取交集，deny 优先。列表（含聚合 card 和状态计数）过滤无权资源，按 id 读取无权资源返回 404；不存在与无权 target 使用相同外部错误，拒绝原因只留安全审计。旧 `.state/acl.yaml`、`clientKeys`、`dashboard/human` 绕过均已删除
 - Hub 任务状态枚举与转换表封闭校验；Agent 非法状态或非法转换在写盘前拒绝并关闭违规连接。所有下发、恢复、取消都使用 task 创建时持久化的 `member`，不能因 card 更新或 skill 转移改投其他成员
 
@@ -270,7 +296,7 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 - target `requiresApproval: true` → agent 侧挂起（非终态 input-required，与试点期"回执即终态"语义不兼容变更），hub task 停在 input-required
 - 恢复三入口共用 `tasks/approve`（状态只有一份）：IM AI 回填 / Web 面板确认 / 本地磁贴确认（磁贴随 M5 载体）
 - 恢复链：`tasks/approve` → hub 下行 `message/resume` → agent `startExecution` → 上行 working/终态；拒绝走 `tasks/cancel`（挂起任务 agent 侧直接出队）
-- TTL：超 10 分钟自动 canceled（`approval-ttl-expired`），sweeper 与离线队列同频扫描；reject 与 TTL 都必须下发 `tasks/cancel`，离线 Agent 重连时按 in-flight 清单补发
+- TTL：超过任务进入 `input-required` 时抄下的 `approvalTtl`（缺省 `10m`）自动 canceled（`approval-ttl-expired`），sweeper 与离线队列同频扫描；reject 与 TTL 都必须下发 `tasks/cancel`，离线 Agent 重连时按 in-flight 清单补发
 
 ## 7. artifact 语义
 

@@ -437,8 +437,15 @@ export function startServer({
         return;
       }
       const raw = queue.get(id);
-      if (!raw || !identity.hasPermission(authn.principal, "tasks.approve")
-        || !identity.targetAllowed(authn.principal, raw.member, raw.target)) {
+      if (!raw || !identity.hasPermission(authn.principal, "tasks.approve")) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
+        return;
+      }
+      if (raw.caller) {
+        rpcError(res, rpc.id, JSONRPC_ERRORS.UNSUPPORTED, "这是成员对话，下一条同 contextId 的 message/send 续上，不用审批恢复");
+        return;
+      }
+      if (!identity.targetAllowed(authn.principal, raw.member, raw.target)) {
         rpcError(res, rpc.id, JSONRPC_ERRORS.TASK_NOT_FOUND);
         return;
       }
@@ -697,6 +704,17 @@ export function startServer({
         } catch (error) {
           sendIdentityError(res, error);
         }
+        return;
+      }
+
+      if (req.method === "GET" && pathname === "/api/cards") {
+        const token = parseBearer(req.headers.authorization);
+        const agentId = token ? authenticateAgentToken(secrets, token) : null;
+        if (!agentId) {
+          sendJson(res, 401, { error: "agent token required" });
+          return;
+        }
+        sendJson(res, 200, { cards: registry.cards() });
         return;
       }
 

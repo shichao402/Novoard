@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseDuration } from "./duration.mjs";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 const TASK_STATES = new Set([
@@ -22,6 +23,23 @@ const ALLOWED_TRANSITIONS = new Map([
 ]);
 
 let seq = 0;
+
+const TRACE_TYPES = new Set(["run/start", "step/start", "step/end", "run/end", "run/truncated"]);
+
+/** 运行记录的最后一条，给 agent-lost 和任务列表用。不参与恢复执行。 */
+export function traceSummary(task) {
+  const events = Array.isArray(task?.trace) ? task.trace : [];
+  const last = events[events.length - 1];
+  if (!last) return "";
+  const event = last.type === "run/truncated" && last.last?.type ? last.last : last;
+  if (event.type === "step/start" || event.type === "step/end") return `${event.type} ${event.index ?? ""}`.trim();
+  return String(event.type ?? "");
+}
+
+export function lostMessage(task) {
+  const summary = traceSummary(task);
+  return summary ? `agent-lost：${summary}` : "agent-lost";
+}
 
 export function createTaskQueue({ dir, now = Date.now } = {}) {
   if (!dir) throw new Error("TaskQueue 需要 dir");
@@ -80,8 +98,13 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
   }
 
   function snapshot(task) {
-    const { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization } = task;
-    return { id, contextId, skillId, target, member, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization };
+    const { id, contextId, skillId, target, member, caller, vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization, trace, limits, approvalDeadline } = task;
+    return {
+      id, contextId, skillId, target, member, caller: caller || "", vars, actor, lane, state, createdAt, updatedAt, status, artifacts, history, requiresApproval, ruleTrace, expiresAt, queuedOfflineAt, authorization,
+      trace: Array.isArray(trace) ? trace : [],
+      limits: limits ?? null,
+      approvalDeadline: approvalDeadline ?? "",
+    };
   }
 
   return {
@@ -89,7 +112,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
     subscribe,
 
     /** 触发入队：生成 task id、建 task 对象、落盘、入索引。 */
-    submit({ skillId, target, member = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "", authorization = null }) {
+    submit({ skillId, target, member = "", caller = "", vars = {}, actor = "human", lane = "a2a", contextId = "", requiresApproval = false, ruleTrace = [], expiresAt = "", authorization = null }) {
       const id = `task-${new Date(now()).toISOString().slice(0, 10).replace(/-/g, "")}-${String(++seq).padStart(3, "0")}`;
       const ts = new Date(now()).toISOString();
       const task = {
@@ -98,6 +121,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         skillId,
         target,
         member,
+        caller,
         vars,
         actor,
         lane,
@@ -142,6 +166,10 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       task.state = state;
       task.updatedAt = ts;
       task.status = { ...extra, state, timestamp: ts };
+      if (state === "input-required") {
+        const ttlMs = parseDuration(task.limits?.approvalTtl);
+        if (ttlMs) task.approvalDeadline = new Date(now() + ttlMs).toISOString();
+      }
       if (TERMINAL_STATES.has(state) || state === "working") {
         task.expiresAt = "";
         task.queuedOfflineAt = "";
@@ -183,6 +211,50 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
       return Date.parse(task.expiresAt) <= at;
     },
 
+    /** 进入 working 时抄下 Target 时长。已有值不覆盖，之后改配置不影响这一单。 */
+    stampLimits(taskId, limits) {
+      const task = index.get(taskId);
+      if (!task || task.limits) return task;
+      task.limits = {
+        timeout: limits?.timeout || "10m",
+        lostTtl: limits?.lostTtl || "10m",
+        approvalTtl: limits?.approvalTtl || "",
+      };
+      persist(snapshot(task));
+      return task;
+    },
+
+    /**
+     * 追加运行记录。不改变任务状态。相同 seq + type 幂等。
+     * 终态之后仍可追加，用来补上进程消失前没送出的尾巴。
+     */
+    appendTrace(taskId, event) {
+      const task = index.get(taskId);
+      if (!task) return { ok: false, reason: "task-not-found" };
+      const seq = Number(event?.seq);
+      const type = String(event?.type ?? "");
+      if (!Number.isInteger(seq) || seq < 1 || !TRACE_TYPES.has(type)) {
+        return { ok: false, reason: "invalid-trace" };
+      }
+      if (!Array.isArray(task.trace)) task.trace = [];
+      if (task.trace.some((item) => item.seq === seq && item.type === type)) {
+        return { ok: true, dedup: true, task };
+      }
+      const stored = { seq, type, ts: String(event.ts ?? new Date(now()).toISOString()), taskId: String(event.taskId ?? taskId) };
+      for (const key of ["target", "bootId", "timeout", "index", "command", "exit", "state", "last"]) {
+        if (event[key] !== undefined) stored[key] = event[key];
+      }
+      task.trace.push(stored);
+      task.trace.sort((left, right) => left.seq - right.seq || String(left.type).localeCompare(String(right.type)));
+      const summary = traceSummary(task);
+      if (type === "run/truncated" && summary && String(task.status?.message ?? "").startsWith("agent-lost")) {
+        task.status = { ...task.status, message: `agent-lost：${summary}` };
+      }
+      persist(snapshot(task));
+      emit(task);
+      return { ok: true, dedup: false, task };
+    },
+
     /** 追加 artifact（契约 §7：A2A 车道产物）。 */
     addArtifact(taskId, artifact) {
       const task = index.get(taskId);
@@ -205,6 +277,7 @@ export function createTaskQueue({ dir, now = Date.now } = {}) {
         status: task.status,
         artifacts: task.artifacts.length ? task.artifacts : undefined,
         history: task.history.length ? task.history : undefined,
+        trace: task.trace?.length ? task.trace : undefined,
       };
     },
 

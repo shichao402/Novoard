@@ -6,10 +6,11 @@
  * card.update 的身份来自连接绑定（帧本身不带 agentId，schema 如此），冒用即无效。
  */
 import { WebSocketServer } from "ws";
+import { lostMessage } from "./queue.mjs";
 import { newMsgId } from "./registry.mjs";
 import { authenticateAgentToken } from "./agent-auth.mjs";
 
-export const CONTRACT_VERSION = "2.0";
+export const CONTRACT_VERSION = "2.1";
 const PING_INTERVAL_MS = 30_000;
 const PING_TIMEOUT_MS = 60_000;
 const AGENT_REPORTED_STATES = new Set(["working", "input-required", "completed", "failed", "canceled"]);
@@ -132,6 +133,17 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
   function handleOps(ws, envelope, onAgentBound) {
     const body = envelope.body;
     const type = body?.type;
+    if (type === "notify.owner") {
+      const id = boundAgentId.get(ws);
+      const text = String(body?.text ?? "").trim();
+      if (!id || !text) return;
+      Promise.resolve(notify?.pushOwner?.({ from: id, text })).catch((error) => {
+        log.error?.(`企微转发失败：${error.message}`);
+      });
+      if (envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+      return;
+    }
+
     const opsCheck = validate.opsBody(type, body);
     if (!opsCheck.ok) {
       log.error?.(`ops 帧不合法：${opsCheck.errors.join("; ")}`);
@@ -166,8 +178,11 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       }
       agentIdOf(ws, body.agentId);
       onAgentBound?.(body.agentId);
+      const previousBootId = registry.bootIdOf(body.agentId);
       sendEnvelope(ws, opsFrame({ type: "agent.hello.ack", inFlightTaskIds: body.inFlightTaskIds ?? [] }));
       reconcileCanceledTasks(ws, body.agentId, body.inFlightTaskIds ?? []);
+      reconcileBoot(ws, body.agentId, body.bootId ?? "", body.inFlightTaskIds ?? [], previousBootId);
+      if (body.bootId) registry.rememberBoot(body.agentId, body.bootId);
       audit.append({
         actor: `agent:${body.agentId}`,
         lane: "ops",
@@ -210,9 +225,126 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
     boundAgentId.set(ws, id);
   }
 
+  function acceptsConversation(member) {
+    return [...(member?.skills?.values?.() ?? [])].some((skill) => skill?.["x-novoard-kind"] === "agent");
+  }
+
+  /** 地址不对或不接受对话时，告诉发送方并留下审计，不拆掉它的连接。 */
+  function refuseConversation(ws, envelope, reason) {
+    const agentId = boundAgentId.get(ws) ?? authenticatedAgentId.get(ws) ?? "unknown";
+    audit.append({
+      actor: `agent:${agentId}`,
+      lane: "ops",
+      target: "hub",
+      outcome: "rejected",
+      detail: { reason, envelopeTaskId: envelope.taskId },
+    }, validate.auditEvent);
+    if (envelope.taskId) {
+      sendEnvelope(ws, {
+        v: 1,
+        kind: "a2a",
+        msgId: newMsgId(),
+        taskId: envelope.taskId,
+        ts: new Date().toISOString(),
+        body: {
+          jsonrpc: "2.0",
+          method: "message/notification",
+          params: {
+            message: {
+              role: "agent",
+              parts: [{ kind: "text", text: reason }],
+              contextId: envelope.taskId,
+              taskId: envelope.taskId,
+              kind: "status-update",
+              status: { state: "rejected", message: reason, timestamp: new Date().toISOString() },
+            },
+          },
+        },
+      });
+    }
+    if (envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+  }
+
+  /** 成员发给成员的自然语言。from 只用连接上的身份，忽略报文里自带的 from。 */
+  function deliverConversation(ws, envelope) {
+    const from = boundAgentId.get(ws);
+    const message = envelope.body?.params?.message ?? {};
+    const requested = message.metadata ?? {};
+    const to = String(requested.to ?? "").trim();
+    if (!from || !to || to === from) {
+      refuseConversation(ws, envelope, "peer-address-invalid");
+      return;
+    }
+    const target = registry.connected(to);
+    if (!target || !acceptsConversation(target)) {
+      refuseConversation(ws, envelope, "peer-unavailable");
+      return;
+    }
+    const requestedContext = String(message.contextId || "").trim();
+    const existing = requestedContext
+      ? queue.list({ member: to }).find((task) => task.caller === from && task.contextId === requestedContext)
+      : null;
+    const task = existing ?? queue.submit({
+      skillId: "converse",
+      target: "converse",
+      member: to,
+      caller: from,
+      actor: `agent:${from}`,
+      lane: "a2a",
+      contextId: requestedContext,
+    });
+    if (!task.contextId) task.contextId = task.id;
+    const parts = Array.isArray(message.parts) && message.parts.length
+      ? message.parts
+      : [{ kind: "text", text: "" }];
+    sendEnvelope(target.conn, {
+      v: 1,
+      kind: "a2a",
+      msgId: newMsgId(),
+      taskId: task.id,
+      ts: new Date().toISOString(),
+      body: {
+        jsonrpc: "2.0",
+        method: "message/send",
+        params: {
+          message: {
+            messageId: `msg-${task.id}`,
+            role: "user",
+            parts,
+            contextId: task.contextId,
+            metadata: { lane: "agent", to, from },
+          },
+        },
+      },
+    });
+    if (!existing) queue.transition(task.id, "working");
+    if (envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+  }
+
+  function relayToCaller(task, envelope) {
+    if (!task?.caller) return;
+    const caller = registry.connected(task.caller);
+    if (!caller?.conn) return;
+    const relay = structuredClone(envelope);
+    const message = relay.body?.params?.message;
+    if (message) {
+      message.metadata = {
+        ...(message.metadata ?? {}),
+        lane: "agent",
+        to: task.caller,
+        from: task.member,
+      };
+    }
+    sendEnvelope(caller.conn, relay);
+  }
+
   function handleA2AUpstream(ws, envelope) {
     const body = envelope.body;
     const taskId = envelope.taskId;
+    if (body?.method === "message/send" && body?.params?.message?.metadata?.lane === "agent") {
+      deliverConversation(ws, envelope);
+      return;
+    }
     if (body?.method !== "message/notification") {
       log.error?.(`未知上行 a2a 方法：${body?.method}`);
       return;
@@ -222,6 +354,24 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
     const agentId = boundAgentId.get(ws);
     if (!agentId) {
       rejectAgentFrame(ws, envelope, "agent-not-registered");
+      return;
+    }
+
+    if (kind === "run-trace") {
+      const task = queue.get(taskId);
+      if (!task) {
+        if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+        return;
+      }
+      if (task.member !== agentId) {
+        rejectAgentFrame(ws, envelope, "task-member-mismatch", task);
+        return;
+      }
+      const appended = queue.appendTrace(taskId, message.trace);
+      if (!appended.ok && appended.reason !== "task-not-found") {
+        log.error?.(`运行记录被拒 ${taskId}：${appended.reason}`);
+      }
+      if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: appended.dedup === true });
       return;
     }
 
@@ -245,6 +395,13 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       if (task && task.member !== agentId) {
         rejectAgentFrame(ws, envelope, "task-member-mismatch", task);
         return;
+      }
+      if (task?.caller) {
+        relayToCaller(task, envelope);
+        if (queue.isTerminal(task.state)) {
+          if (ws && envelope.msgId) sendEnvelope(ws, { v: 1, kind: "ack", msgId: envelope.msgId, dedup: false });
+          return;
+        }
       }
       if (!AGENT_REPORTED_STATES.has(state)) {
         rejectAgentFrame(ws, envelope, "invalid-task-state", task);
@@ -349,6 +506,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       log.error?.(`下发失败：任务 ${task.id} 绑定成员 ${task.member} 离线`);
       return { ok: false, reason: "member-offline" };
     }
+    if (!cancel && !resume) stampRunLimits(task, member);
     if (cancel) {
       sendEnvelope(member.conn, {
         v: 1,
@@ -395,6 +553,69 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
     });
     queue.transition(task.id, "working");
     return { ok: true };
+  }
+
+  function stampRunLimits(task, member) {
+    const skill = member?.skills?.get?.(task.skillId) ?? member?.skills?.get?.(task.target);
+    queue.stampLimits?.(task.id, {
+      timeout: skill?.["x-novoard-timeout"] ?? "10m",
+      lostTtl: skill?.["x-novoard-lost"]?.ttl ?? "10m",
+      approvalTtl: skill?.["x-novoard-approval"]?.ttl ?? "",
+    });
+  }
+
+  function ownedRuns(agentId) {
+    return queue.list({ member: agentId }).filter((task) =>
+      !task.caller && (task.state === "working" || task.state === "input-required"));
+  }
+
+  function failLost(task) {
+    const current = queue.get(task.id) ?? task;
+    if (queue.isTerminal(current.state)) return;
+    queue.transition(current.id, "failed", { message: lostMessage(current) });
+    audit.append({
+      actor: "hub",
+      lane: "a2a",
+      target: current.target,
+      taskId: current.id,
+      outcome: "failed",
+      detail: { reason: "agent-lost" },
+    }, validate.auditEvent);
+    const failed = queue.get(current.id);
+    Promise.resolve(notify?.({
+      event: {
+        kind: "terminal",
+        taskId: current.id,
+        target: current.target,
+        state: "failed",
+        actor: current.actor,
+        authorization: current.authorization,
+        reason: "agent-lost",
+      },
+    })).catch((error) => log.error?.(`agent-lost 通知失败 ${current.id}：${error.message}`));
+    return failed;
+  }
+
+  /**
+   * bootId 对账（契约 §4.4）：
+   * 没带 bootId 则保持 2.0 行为；Hub 不记得旧进程或进程没变，清单外的任务重新下发；
+   * 进程变了且不在清单里，收成 agent-lost。清单里的任务保持原状。
+   */
+  function reconcileBoot(ws, agentId, bootId, inFlightTaskIds, previousBootId) {
+    if (!bootId) return;
+    const inFlight = new Set(inFlightTaskIds);
+    const bootChanged = Boolean(previousBootId) && previousBootId !== bootId;
+    for (const task of ownedRuns(agentId)) {
+      if (inFlight.has(task.id)) continue;
+      if (bootChanged) {
+        failLost(task);
+        continue;
+      }
+      delegate({ task, vars: task.vars ?? {} }).catch((error) => {
+        log.error?.(`断线重发失败 ${task.id}：${error.message}`);
+      });
+    }
+    void ws;
   }
 
   function reconcileCanceledTasks(ws, agentId, inFlightTaskIds) {

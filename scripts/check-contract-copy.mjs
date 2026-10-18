@@ -9,7 +9,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SSOT_SCHEMA_DIR = join(ROOT, "docs", "architecture", "schemas");
@@ -45,7 +45,7 @@ if (!existsSync(SSOT_FRAMES)) {
   fail++;
 } else {
   try {
-    const { createFrameValidator } = await import(SSOT_FRAMES);
+    const { createFrameValidator } = await import(pathToFileURL(SSOT_FRAMES).href);
     const v = createFrameValidator();
 
     // good：合法 ops 信封帧（hello）

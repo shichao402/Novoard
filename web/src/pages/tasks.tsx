@@ -11,6 +11,14 @@ import { hasPermission, queryKeys, useMe } from "@/lib/queries";
 
 const terminal = new Set(["completed", "failed", "canceled", "rejected"]);
 
+function traceLabel(trace: Task["trace"]) {
+  const last = trace?.[trace.length - 1];
+  if (!last) return "";
+  const event = last.type === "run/truncated" && last.last?.type ? last.last : last;
+  if (event.type === "step/start" || event.type === "step/end") return `${event.type} ${event.index ?? ""}`.trim();
+  return event.type ?? "";
+}
+
 export default function TasksPage() {
   const me = useMe();
   const queryClient = useQueryClient();
@@ -67,6 +75,11 @@ export default function TasksPage() {
           {row.state}
         </Tag>
       ),
+    },
+    {
+      title: "记录",
+      dataIndex: "trace",
+      render: (_, row) => traceLabel(row.trace),
     },
     { title: "触发者", dataIndex: "actor" },
     { title: "更新时间", dataIndex: "updatedAt", valueType: "dateTime" },

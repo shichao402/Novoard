@@ -1162,6 +1162,8 @@ async function atomicWrite(file, value) {
     const directory = await open(dirname(file), fsConstants.O_RDONLY);
     try {
       await directory.sync();
+    } catch (error) {
+      if (error?.code !== "EPERM" && error?.code !== "EINVAL") throw error;
     } finally {
       await directory.close();
     }

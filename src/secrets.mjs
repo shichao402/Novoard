@@ -146,6 +146,8 @@ export function createSecrets({ dir, env = process.env } = {}) {
         const directory = openSync(dirname(file), fsConstants.O_RDONLY);
         try {
           fsyncSync(directory);
+        } catch (error) {
+          if (error?.code !== "EPERM" && error?.code !== "EINVAL") throw error;
         } finally {
           closeSync(directory);
         }

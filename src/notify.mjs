@@ -122,8 +122,15 @@ export function createNotify({ secrets, bot = null, log = console, fetchImpl = f
     if (kind === "member-event") {
       return `**🟢 Novoard 成员事件**\n> 事件：${state}\n> 成员：${target}\n> 时间：${ts}`;
     }
+    if (kind === "owner-message") {
+      return `**Novoard**\n> 来自：${target}\n> ${reason}\n> 时间：${ts}`;
+    }
     return `**Novoard 事件**\n> ${kind} ${target} ${state} ${ts}`;
   }
 
-  return { emit, _test: { windows, send, flushDigest } };
+  function pushOwner({ from, text }) {
+    return send(`**Novoard**\n> 来自：${from}\n> ${text}\n> 时间：${now()}`);
+  }
+
+  return { emit, pushOwner, _test: { windows, send, flushDigest } };
 }
