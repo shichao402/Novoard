@@ -1,0 +1,351 @@
+{
+  "version": "2.2",
+  "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
+  "cases": [
+    {
+      "id": "good-envelope-ops",
+      "target": "envelope",
+      "expect": "pass",
+      "desc": "最小合法 ops 信封",
+      "frame": {
+        "v": 1,
+        "kind": "ops",
+        "msgId": "e-fixture-ops-1",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "body": { "type": "agent.ping", "ts": "2026-01-01T00:00:00.000Z" }
+      }
+    },
+    {
+      "id": "good-envelope-a2a",
+      "target": "envelope",
+      "expect": "pass",
+      "desc": "合法 a2a 信封，带 taskId 与 body",
+      "frame": {
+        "v": 1,
+        "kind": "a2a",
+        "msgId": "e-fixture-a2a-1",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "taskId": "task-fixture-1",
+        "body": { "jsonrpc": "2.0", "method": "message/send", "params": { "message": { "messageId": "m-1", "role": "user", "parts": [{ "kind": "text", "text": "run x" }] } } }
+      }
+    },
+    {
+      "id": "good-envelope-ack",
+      "target": "envelope",
+      "expect": "pass",
+      "desc": "合法 ack 信封",
+      "frame": { "v": 1, "kind": "ack", "msgId": "e-fixture-ack-1", "dedup": false }
+    },
+    {
+      "id": "bad-envelope-missing-kind",
+      "target": "envelope",
+      "expect": "reject",
+      "desc": "缺 kind：传输层解码前提不成立",
+      "frame": { "v": 1, "msgId": "e-fixture-bad-1", "ts": "2026-01-01T00:00:00.000Z", "body": { "type": "agent.ping" } }
+    },
+    {
+      "id": "bad-envelope-unknown-field",
+      "target": "envelope",
+      "expect": "reject",
+      "desc": "信封层未知字段必须被拒（信封保持封闭）",
+      "frame": {
+        "v": 1,
+        "kind": "ops",
+        "msgId": "e-fixture-bad-2",
+        "ts": "2026-01-01T00:00:00.000Z",
+        "body": { "type": "agent.ping", "ts": "2026-01-01T00:00:00.000Z" },
+        "x-unknown": "v"
+      }
+    },
+    {
+      "id": "bad-envelope-wrong-v",
+      "target": "envelope",
+      "expect": "reject",
+      "desc": "v 不是 1：信封版本不符",
+      "frame": { "v": 2, "kind": "ops", "msgId": "e-fixture-bad-3", "ts": "2026-01-01T00:00:00.000Z", "body": { "type": "agent.ping", "ts": "2026-01-01T00:00:00.000Z" } }
+    },
+    {
+      "id": "bad-envelope-a2a-missing-taskid",
+      "target": "envelope",
+      "expect": "reject",
+      "desc": "a2a 信封缺 taskId",
+      "frame": { "v": 1, "kind": "a2a", "msgId": "e-fixture-bad-4", "ts": "2026-01-01T00:00:00.000Z", "body": { "jsonrpc": "2.0" } }
+    },
+    {
+      "id": "good-hello-minimal",
+      "target": "ops:agent.hello",
+      "expect": "pass",
+      "desc": "最小合法 hello（不含 bootId 与 inFlightTaskIds）",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.1",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        }
+      }
+    },
+    {
+      "id": "good-hello-with-unknown-field",
+      "target": "ops:agent.hello",
+      "expect": "pass",
+      "desc": "次版本新增可选字段：帧层未知字段必须被忽略而非拒收（契约 §0 演进策略）",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.1",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        },
+        "x-future-optional": { "nested": true }
+      }
+    },
+    {
+      "id": "bad-hello-missing-card",
+      "target": "ops:agent.hello",
+      "expect": "reject",
+      "desc": "缺必填字段 card",
+      "frame": { "type": "agent.hello", "contractVersion": "2.1", "agentId": "agent-a" }
+    },
+    {
+      "id": "bad-hello-card-missing-description",
+      "target": "ops:agent.hello",
+      "expect": "reject",
+      "desc": "card 缺必填字段 description：字段级失败应触发 hello nack",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.1",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        }
+      }
+    },
+    {
+      "id": "bad-hello-contract-version-format",
+      "target": "ops:agent.hello",
+      "expect": "reject",
+      "desc": "contractVersion 必须为 X.Y，带 v 前缀被拒（格式统一要求）",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "v2.1",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        }
+      }
+    },
+    {
+      "id": "good-ping",
+      "target": "ops:agent.ping",
+      "expect": "pass",
+      "desc": "合法心跳",
+      "frame": { "type": "agent.ping", "ts": "2026-01-01T00:00:00.000Z" }
+    },
+    {
+      "id": "bad-ping-ts-not-string",
+      "target": "ops:agent.ping",
+      "expect": "reject",
+      "desc": "ts 类型不符",
+      "frame": { "type": "agent.ping", "ts": 12345 }
+    },
+    {
+      "id": "good-telemetry",
+      "target": "ops:telemetry",
+      "expect": "pass",
+      "desc": "合法遥测",
+      "frame": { "type": "telemetry", "ts": "2026-01-01T00:00:00.000Z", "cpuPct": 1.5, "memPct": 20, "diskPct": 30 }
+    },
+    {
+      "id": "good-telemetry-extra-metric",
+      "target": "ops:telemetry",
+      "expect": "pass",
+      "desc": "新增指标字段无需升主版本",
+      "frame": { "type": "telemetry", "ts": "2026-01-01T00:00:00.000Z", "cpuPct": 1.5, "memPct": 20, "diskPct": 30, "swapPct": 0 }
+    },
+    {
+      "id": "bad-telemetry-out-of-range",
+      "target": "ops:telemetry",
+      "expect": "reject",
+      "desc": "cpuPct 超出 0..100",
+      "frame": { "type": "telemetry", "ts": "2026-01-01T00:00:00.000Z", "cpuPct": 101, "memPct": 20, "diskPct": 30 }
+    },
+    {
+      "id": "good-hello-nack-schema-mismatch",
+      "target": "ops:agent.hello.nack",
+      "expect": "pass",
+      "desc": "字段级不兼容的 nack，带 detail 路径",
+      "frame": {
+        "type": "agent.hello.nack",
+        "reason": "contract-schema-mismatch",
+        "hubVersion": "2.1",
+        "agentVersion": "2.1",
+        "retryable": false,
+        "detail": ["/card must have required property 'description'"]
+      }
+    },
+    {
+      "id": "good-hello-nack-major-mismatch",
+      "target": "ops:agent.hello.nack",
+      "expect": "pass",
+      "desc": "主版本不匹配的 nack",
+      "frame": { "type": "agent.hello.nack", "reason": "contract-major-mismatch", "hubVersion": "2.1", "agentVersion": "3.0" }
+    },
+    {
+      "id": "bad-hello-nack-unknown-reason",
+      "target": "ops:agent.hello.nack",
+      "expect": "reject",
+      "desc": "reason 不在枚举内",
+      "frame": { "type": "agent.hello.nack", "reason": "something-else", "hubVersion": "2.1" }
+    },
+    {
+      "id": "bad-hello-nack-missing-hubversion",
+      "target": "ops:agent.hello.nack",
+      "expect": "reject",
+      "desc": "缺 hubVersion：无法判断对方版本",
+      "frame": { "type": "agent.hello.nack", "reason": "contract-major-mismatch" }
+    },
+    {
+      "id": "good-hello-ack",
+      "target": "ops:agent.hello.ack",
+      "expect": "pass",
+      "desc": "注册成功确认",
+      "frame": { "type": "agent.hello.ack", "inFlightTaskIds": ["task-fixture-1"], "hubVersion": "2.1" }
+    },
+    {
+      "id": "bad-hello-ack-bad-taskid",
+      "target": "ops:agent.hello.ack",
+      "expect": "reject",
+      "desc": "任务 id 前缀不符",
+      "frame": { "type": "agent.hello.ack", "inFlightTaskIds": ["bad-id"] }
+    },
+    {
+      "id": "good-frame-reject",
+      "target": "ops:frame.reject",
+      "expect": "pass",
+      "desc": "通用帧拒绝回执",
+      "frame": {
+        "type": "frame.reject",
+        "refMsgId": "e-fixture-ops-1",
+        "reason": "ops-schema-mismatch",
+        "hubVersion": "2.1",
+        "retryable": false,
+        "detail": ["/ts must be string"]
+      }
+    },
+    {
+      "id": "good-frame-reject-unknown-type",
+      "target": "ops:frame.reject",
+      "expect": "pass",
+      "desc": "未知类型拒绝",
+      "frame": { "type": "frame.reject", "refMsgId": "e-fixture-ops-1", "reason": "unknown-ops-type", "hubVersion": "2.1" }
+    },
+    {
+      "id": "bad-frame-reject-missing-refmsgid",
+      "target": "ops:frame.reject",
+      "expect": "reject",
+      "desc": "缺 refMsgId：无法关联被拒帧",
+      "frame": { "type": "frame.reject", "reason": "ops-schema-mismatch", "hubVersion": "2.1" }
+    },
+    {
+      "id": "good-card",
+      "target": "agentCard",
+      "expect": "pass",
+      "desc": "合法 agent card",
+      "frame": {
+        "name": "agent-a",
+        "description": "agent-a",
+        "version": "2.0.0",
+        "capabilities": { "streaming": false, "pushNotifications": true },
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [{ "id": "skill-a", "name": "skill-a", "description": "skill-a" }]
+      }
+    },
+    {
+      "id": "bad-card-unknown-field",
+      "target": "agentCard",
+      "expect": "reject",
+      "desc": "agent-card 保持封闭，未知字段被拒（例外清单见契约 §0）",
+      "frame": {
+        "name": "agent-a",
+        "description": "agent-a",
+        "version": "2.0.0",
+        "capabilities": { "streaming": false, "pushNotifications": true },
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+        "skills": [],
+        "x-unknown": 1
+      }
+    },
+    {
+      "id": "good-task-completed",
+      "target": "task",
+      "expect": "pass",
+      "desc": "合法已完成 task",
+      "frame": { "id": "task-fixture-1", "kind": "task", "status": { "state": "completed" } }
+    },
+    {
+      "id": "bad-task-unknown-state",
+      "target": "task",
+      "expect": "reject",
+      "desc": "state 不在枚举内",
+      "frame": { "id": "task-fixture-1", "kind": "task", "status": { "state": "done" } }
+    },
+    {
+      "id": "good-audit-event",
+      "target": "auditEvent",
+      "expect": "pass",
+      "desc": "合法审计事件",
+      "frame": { "ts": "2026-01-01T00:00:00.000Z", "actor": "human", "lane": "a2a", "target": "skill-a", "outcome": "completed" }
+    },
+    {
+      "id": "bad-audit-event-unknown-field",
+      "target": "auditEvent",
+      "expect": "reject",
+      "desc": "audit-event 保持封闭，字段漂移会使历史流水不可比",
+      "frame": { "ts": "2026-01-01T00:00:00.000Z", "actor": "human", "lane": "a2a", "target": "skill-a", "outcome": "completed", "x-unknown": 1 }
+    },
+    {
+      "id": "good-target",
+      "target": "targets",
+      "expect": "pass",
+      "desc": "合法 target 定义",
+      "frame": {
+        "targets": {
+          "t-1": { "title": "x", "steps": [{ "script": "echo" }], "expose": "a2a", "audit": "summary", "requiresApproval": false, "notify": "never" }
+        }
+      }
+    },
+    {
+      "id": "bad-target-missing-required",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "缺必填字段",
+      "frame": { "targets": { "t-1": { "title": "x" } } }
+    }
+  ]
+}

@@ -19,6 +19,7 @@ import { createServer } from "node:http";
 import { readBody, readJson, sendJson, parseBearer } from "./http-helpers.mjs";
 import { createStaticSite } from "./static-site.mjs";
 import { PRODUCT_VERSION } from "./version.mjs";
+import { CONTRACT_VERSION } from "./contract/version.mjs";
 import {
   hashAgentToken,
   normalizeAgentId,
@@ -1063,6 +1064,8 @@ export function startServer({
         const tasks = queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target));
         const body = {
           version: PRODUCT_VERSION,
+          // 契约版本随状态一并返回：排查"某 agent 连不上/字段被忽略"时，先比对这里的值与 agent 日志里的 contractVersion
+          contractVersion: CONTRACT_VERSION,
           startedAt: server.startedAt ?? null,
           members: views.map((member) => ({
             agentId: member.agentId,

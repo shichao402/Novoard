@@ -1,15 +1,24 @@
 # 契约定义（SSOT）
 
-- 版本：v2.1（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。不带这些字段的 2.0 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.2（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.1`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.2`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
+- 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
+- 信封层（`v` / `kind` / `msgId` / `taskId` / `dedup`）保持封闭（`additionalProperties: false`），未知字段仍被拒绝。信封是两端传输层的最小共同约定，任何扩写都会破坏解码前提
+- 封闭集合与理由（除下列 5 张外，其余 schema 均为开放式演进）：`a2a-envelope`（传输层解码前提）、`agent-card`（A2A spec 对齐，扩展须走 `x-novoard-*` 前缀）、`task`（A2A spec 字面对齐，不接受私有字段）、`audit-event`（审计流水格式需长期稳定，字段漂移会造成历史流水不可比）、`target`（agent 本地配置，由用户手工编辑，宽松校验会掩盖拼写错误）
+- 两个方向的行为：旧实现连新服务时，新字段被忽略，旧实现按原语义工作；新实现连旧服务时，旧服务忽略新实现新增的可选字段，新实现须容忍该字段缺失并走默认路径
+- 主版本破坏点清单（这些改动必须升主版本，不可作为次版本发布）：删除已有必填字段；删除枚举值或收窄枚举；反转字段语义（同名字段含义变化）；改变必填性（可选改必填）；收窄已发布字段的类型或取值域；改变 wire format（帧的编码方式、分隔与分帧规则）；把开放式 schema 改为封闭式
+- 次版本安全改动清单（这些可以只升次版本）：新增可选字段；新增 ops 帧类型（旧实现对未知类型走 `frame.reject`，不崩溃）；放宽取值域；新增封闭 schema 中的 `x-novoard-*` 扩展字段
+- 配套发布规则：契约变更必须两仓同批发布。单侧先发时，行为由上面的「两个方向的行为」决定——次版本先发是安全的（旧对端忽略新字段），主版本先发会让旧对端收到 `agent.hello.nack`（`contract-major-mismatch`）或连接被关闭。因此主版本升级必须先发 hub 再发 agent，且 hub 需在发布说明里写明本版支持的最低 agent 主版本。发布说明按 [guides/release-notes-template.md](guides/release-notes-template.md) 填写「契约与配套发布」一节
+- 运行时可观测性：hub 的 `GET /api/status` 返回 `contractVersion`；两侧均在 `hello` 发出/收到时记录自身与对端契约版本，并记录同一 `msgId`。出现"连接看着正常但任务全失败"时，先比对两侧日志里的 `contractVersion` 与 `msgId` 时间线
+- 文档示例纪律：本文档中的帧与数据示例在代码块前一行写 `<!-- contract-example: <target> -->` 标记，门禁会把示例逐条跑过 schema，冲突即 CI 失败并报出行号。target 取值：`ops:<帧类型>`、`envelope`、`agentCard`、`task`、`auditEvent`、`targets`。不带标记的代码块不校验，因此只能用于非契约结构（HTTP 请求/响应等）；契约结构的示例必须带标记，否则它会在 schema 演进后悄悄变成错的
 - 本版冻结范围与 defer 清单见 §10
 
 ## 1. target 定义（agent 侧 YAML）
@@ -78,6 +87,7 @@ steps:
 
 由 agent 从 target 定义派生，hub 聚合。字段字面对齐 A2A spec：
 
+<!-- contract-example: agentCard -->
 ```json
 {
   "name": "mac-work",
@@ -117,23 +127,36 @@ steps:
 
 ### 3.1 wire 示例
 
+<!-- contract-example: ops:agent.hello -->
 ```json
 { "type": "agent.hello", "contractVersion": "2.1", "agentId": "mac-work",
-  "card": { "…": "§2 结构" },
+  "card": {
+    "name": "mac-work", "description": "工位 Mac · dev builder", "version": "1.0.0",
+    "capabilities": { "streaming": false, "pushNotifications": true },
+    "defaultInputModes": ["text"], "defaultOutputModes": ["text"],
+    "skills": []
+  },
   "bootId": "6f1c2a40-7b8e-4d3a-9c1e-2a4b6c8d0e1f",
   "inFlightTaskIds": ["task-20261012-001"] }
 ```
 
+<!-- contract-example: ops:agent.ping -->
 ```json
 { "type": "agent.ping", "ts": "2026-10-12T08:00:30Z" }
 ```
 
+<!-- contract-example: ops:telemetry -->
 ```json
 { "type": "telemetry", "ts": "2026-10-12T08:00:30Z", "cpuPct": 12, "memPct": 61, "diskPct": 74 }
 ```
 
+<!-- contract-example: ops:card.update -->
 ```json
-{ "type": "card.update", "card": { "…": "§2 结构" } }
+{ "type": "card.update", "card": {
+  "name": "mac-work", "description": "工位 Mac · dev builder", "version": "1.0.0",
+  "capabilities": { "streaming": false, "pushNotifications": true },
+  "defaultInputModes": ["text"], "defaultOutputModes": ["text"],
+  "skills": [] } }
 ```
 
 ### 3.2 路由与拒绝规则（ADR-0005）
@@ -148,6 +171,7 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 
 同一 `agentId` 同一时刻只接受一条已注册连接。已存在在线连接时，新连接的 `agent.hello` 被拒：
 
+<!-- contract-example: ops:agent.hello.nack -->
 ```json
 { "type": "agent.hello.nack", "reason": "instance-conflict", "hubVersion": "2.1", "retryable": true }
 ```
@@ -162,9 +186,10 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 
 隧道内所有帧包私有信封；信封是 Novoard 内部物流，A2A 标准只管"消息长什么样"，不管"怎么运输"：
 
+<!-- contract-example: envelope -->
 ```json
 { "v": 1, "kind": "a2a", "msgId": "e-42", "taskId": "task-20261012-001",
-  "ts": "2026-10-12T09:00:00Z", "body": { "…": "完整 JSON-RPC 消息原样" } }
+  "ts": "2026-10-12T09:00:00Z", "body": { "jsonrpc": "2.0", "id": "req-1", "method": "tasks/get", "params": { "id": "task-20261012-001" } } }
 ```
 
 - `kind`: `ops` / `a2a` / `ack`；`taskId` 仅 a2a 帧必带
@@ -175,8 +200,9 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 
 hub → agent 委派（`message/send` 的 params 原样转发，taskId/contextId 由 hub 生成并关联）：
 
+<!-- contract-example: envelope -->
 ```json
-{ "v": 1, "kind": "a2a", "msgId": "e-42", "taskId": "task-20261012-001", "ts": "…",
+{ "v": 1, "kind": "a2a", "msgId": "e-42", "taskId": "task-20261012-001", "ts": "2026-10-12T09:00:00Z",
   "body": {
     "jsonrpc": "2.0", "id": "req-1", "method": "message/send",
     "params": { "message": {
@@ -187,8 +213,9 @@ hub → agent 委派（`message/send` 的 params 原样转发，taskId/contextId
 
 agent → hub 上行（终态/进度/artifact 走 A2A push notification 形状）：
 
+<!-- contract-example: envelope -->
 ```json
-{ "v": 1, "kind": "a2a", "msgId": "e-91", "taskId": "task-20261012-001", "ts": "…",
+{ "v": 1, "kind": "a2a", "msgId": "e-91", "taskId": "task-20261012-001", "ts": "2026-10-12T09:07:41Z",
   "body": {
     "jsonrpc": "2.0", "method": "message/notification",
     "params": { "message": {
@@ -284,6 +311,7 @@ fire-and-forget：客户端不查进度，靠通知扇出收终态（PRD-5 F4 �
 
 JSONL 事件流水（issue-handler 同款模式），每行一事件：
 
+<!-- contract-example: auditEvent -->
 ```json
 { "ts": "2026-10-12T09:00:00Z", "actor": "client:with", "lane": "a2a",
   "target": "dev-build-investm", "taskId": "task-20261012-001",

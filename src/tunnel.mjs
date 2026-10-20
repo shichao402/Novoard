@@ -8,10 +8,15 @@
 import { WebSocketServer } from "ws";
 import { lostMessage } from "./queue.mjs";
 import { newMsgId } from "./registry.mjs";
+// 契约版本单一来源（需求 4）：升级契约只改 src/contract/version.mjs
+import { CONTRACT_VERSION } from "./contract/version.mjs";
 
-export const CONTRACT_VERSION = "2.1";
+export { CONTRACT_VERSION };
+
 const PING_INTERVAL_MS = 30_000;
 const PING_TIMEOUT_MS = 60_000;
+/** ops 车道已知帧类型（用于区分「schema 不符」与「未知类型」两种拒绝原因）。 */
+const KNOWN_OPS_TYPES = new Set(["agent.hello", "agent.hello.ack", "agent.hello.nack", "agent.ping", "telemetry", "card.update", "frame.reject", "notify.owner"]);
 const AGENT_REPORTED_STATES = new Set(["working", "input-required", "completed", "failed", "canceled"]);
 const LOCAL_MIRROR_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 
@@ -75,11 +80,17 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
         envelope = JSON.parse(String(raw));
       } catch {
         log.error?.("隧道帧解析失败，丢弃");
+        // 无法解析就无从回执 msgId，只能以可读原因关闭，让对端得到明确信号而非静默挂起
+        try { ws.close(1003, "malformed-frame: JSON parse failed"); } catch { /* noop */ }
         return;
       }
       const check = validate.envelope(envelope);
       if (!check.ok) {
-        log.error?.(`信封不合法：${check.errors.join("; ")}`);
+        const reason = `envelope rejected: ${check.errors.join("; ")}`;
+        log.error?.(reason);
+        // 契约需求 3.7：信封非法时不得静默返回。
+        // 信封是传输层解码前提，非法即无法安全继续该连接，以可读关闭原因告知对端（不新增契约外帧类型）
+        try { ws.close(1008, reason.slice(0, 120)); } catch { /* noop */ }
         return;
       }
       if (envelope.kind === "a2a") {
@@ -150,7 +161,32 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
 
     const opsCheck = validate.opsBody(type, body);
     if (!opsCheck.ok) {
-      log.error?.(`ops 帧不合法：${opsCheck.errors.join("; ")}`);
+      const detail = opsCheck.errors;
+      log.error?.(`ops 帧不合法（type=${type ?? "missing"}）：${detail.join("; ")}`);
+      // 契约需求 3.1 / 3.8：拒绝必须显式回执，不得仅记录日志后静默丢弃。
+      // type 在 body 校验之前已取出，因此 hello 的字段级失败也能走针对该类型的 nack。
+      if (type === "agent.hello") {
+        sendEnvelope(ws, opsFrame({
+          type: "agent.hello.nack",
+          reason: "contract-schema-mismatch",
+          hubVersion: CONTRACT_VERSION,
+          agentVersion: typeof body?.contractVersion === "string" ? body.contractVersion : undefined,
+          retryable: false,
+          detail,
+        }));
+        return;
+      }
+      // 其他 ops 帧：回 frame.reject，携带原 msgId 便于对端关联定位（ack 语义是「已收到」，不能用于拒绝）
+      if (envelope.msgId) {
+        sendEnvelope(ws, opsFrame({
+          type: "frame.reject",
+          refMsgId: envelope.msgId,
+          reason: KNOWN_OPS_TYPES.has(type) ? "ops-schema-mismatch" : "unknown-ops-type",
+          hubVersion: CONTRACT_VERSION,
+          retryable: false,
+          detail,
+        }));
+      }
       return;
     }
 
@@ -199,13 +235,18 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
       }
       const result = registry.register({ agentId: body.agentId, card: body.card, conn: ws, inFlightTaskIds: body.inFlightTaskIds ?? [] });
       if (!result.ok) {
-        sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: result.reason }));
+        sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: result.reason, hubVersion: CONTRACT_VERSION }));
         return;
       }
       agentIdOf(ws, body.agentId);
       onAgentBound?.(body.agentId);
       const previousBootId = registry.bootIdOf(body.agentId);
-      sendEnvelope(ws, opsFrame({ type: "agent.hello.ack", inFlightTaskIds: body.inFlightTaskIds ?? [] }));
+      // ack 回带 hubVersion：agent 侧把它和本端 contractVersion 一起落日志，两侧版本差一眼可见（契约 §0）
+      sendEnvelope(ws, opsFrame({
+        type: "agent.hello.ack",
+        inFlightTaskIds: body.inFlightTaskIds ?? [],
+        hubVersion: CONTRACT_VERSION,
+      }));
       reconcileCanceledTasks(ws, body.agentId, body.inFlightTaskIds ?? []);
       reconcileBoot(ws, body.agentId, body.bootId ?? "", body.inFlightTaskIds ?? [], previousBootId);
       if (body.bootId) registry.rememberBoot(body.agentId, body.bootId);
@@ -214,8 +255,18 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
         lane: "ops",
         target: "hub",
         outcome: "completed",
-        detail: { reason: `agent 注册：${body.card?.name ?? body.agentId}` },
+        detail: {
+          reason: `agent 注册：${body.card?.name ?? body.agentId}`,
+          // 双方契约版本入审计：事后查"某天开始某成员行为异常"时，能直接看到当时两侧各是什么版本
+          contractVersion: CONTRACT_VERSION,
+          agentContractVersion: body.contractVersion,
+        },
       }, validate.auditEvent);
+      // 同一 msgId 在两侧日志各出现一次，出现争议时按它对齐时间线（契约 §0 可观测性）
+      log.info?.(
+        `agent ${body.agentId} 注册成功（msgId=${envelope.msgId ?? "?"}，hub contractVersion=${CONTRACT_VERSION}，` +
+          `agent contractVersion=${body.contractVersion}${body.contractVersion !== CONTRACT_VERSION ? "，两侧版本不同，按次版本兼容处理" : ""}）`,
+      );
       callbacks.onMemberOnline?.(body.agentId); // M2：离线队列补下发钩子（main 装配层注入）
       notify?.({ event: { kind: "member-event", target: body.agentId, state: "online" } }); // M3：成员事件进通知面与规则源
       return;

@@ -13,6 +13,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 契约门禁的跨仓一致性判定入口（需求 6）：
+      # SSOT 自检只能证明本仓自洽，需检出 agent 仓比对锁定拷贝是否同步。
+      - name: Checkout agent repo (contract copy)
+        uses: actions/checkout@v4
+        with:
+          repository: shichao402/novoard-agent
+          ref: main
+          path: .agent-copy
+          sparse-checkout: |
+            src/contract
+          sparse-checkout-cone-mode: false
+        continue-on-error: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -23,5 +35,9 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix web
       - run: npm --prefix web exec -- playwright install --with-deps chromium
+      # test:all 内部包含 contract-gate。跨仓路径通过环境变量传入：
+      # agent 仓检出成功时做跨仓比对，失败时门禁输出会标注未做比对，不静默通过。
       - run: npm run test:all
+        env:
+          NOVOARD_AGENT_ROOT: ${{ hashFiles('.agent-copy/src/contract/frames.mjs') != '' && '.agent-copy' || '' }}
       - run: docker build -f deploy/Dockerfile .
