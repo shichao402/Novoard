@@ -1,3 +1,7 @@
+/**
+ * agent token 的纯函数层：生成、哈希、常量时间比较。
+ * 存储与生命周期（签发/轮换/吊销/迁移）归 members.mjs，本模块不碰任何存储。
+ */
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export function hashAgentToken(token) {
@@ -9,30 +13,11 @@ export function issueAgentToken() {
   return `nva_${id}_${randomBytes(32).toString("base64url")}`;
 }
 
-export function authenticateAgentToken(secrets, token) {
-  const supplied = hashAgentToken(token);
-  const entries = Object.entries(secrets.get("agentTokenHashes"));
-  for (const [agentId, expected] of entries) {
-    if (safeEqual(supplied, expected)) return agentId;
-  }
-  return null;
-}
-
-export function setAgentTokenHash(secrets, agentId, token) {
-  const normalized = normalizeAgentId(agentId);
-  const current = secrets.get("agentTokenHashes");
-  secrets.set({ agentTokenHashes: { ...current, [normalized]: hashAgentToken(token) } });
-  return normalized;
-}
-
-export function revokeAgentToken(secrets, agentId) {
-  const normalized = normalizeAgentId(agentId);
-  const current = secrets.get("agentTokenHashes");
-  if (!Object.hasOwn(current, normalized)) return false;
-  const next = { ...current };
-  delete next[normalized];
-  secrets.set({ agentTokenHashes: next });
-  return true;
+/** 常量时间比较两个 token 哈希；长度不同直接不等，不泄漏内容。 */
+export function tokenHashMatches(supplied, expected) {
+  const left = Buffer.from(String(supplied));
+  const right = Buffer.from(String(expected));
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 export function normalizeAgentId(value) {
@@ -43,10 +28,4 @@ export function normalizeAgentId(value) {
     throw error;
   }
   return agentId;
-}
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  return left.length === right.length && timingSafeEqual(left, right);
 }

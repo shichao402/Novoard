@@ -14,8 +14,10 @@ const terminal = new Set(["completed", "failed", "canceled", "rejected"]);
 function traceLabel(trace: Task["trace"]) {
   const last = trace?.[trace.length - 1];
   if (!last) return "";
-  const event = last.type === "run/truncated" && last.last?.type ? last.last : last;
-  if (event.type === "step/start" || event.type === "step/end") return `${event.type} ${event.index ?? ""}`.trim();
+  const event =
+    last.type === "run/truncated" && last.last?.type ? last.last : last;
+  if (event.type === "step/start" || event.type === "step/end")
+    return `${event.type} ${event.index ?? ""}`.trim();
   return event.type ?? "";
 }
 

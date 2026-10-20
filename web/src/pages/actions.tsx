@@ -7,7 +7,7 @@ import {
 } from "@ant-design/pro-components";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Alert, App, Result, Tag } from "antd";
-import { apiFetch, csrfHeaders, type TargetMember } from "@/lib/api";
+import { apiFetch, csrfHeaders, type MemberView } from "@/lib/api";
 import { queryKeys, useMe } from "@/lib/queries";
 
 interface ActionValues {
@@ -18,9 +18,9 @@ interface ActionValues {
 export default function ActionsPage() {
   const { message } = App.useApp();
   const me = useMe();
-  const targets = useQuery({
-    queryKey: queryKeys.targets,
-    queryFn: () => apiFetch<{ catalog: TargetMember[] }>("/api/targets"),
+  const members = useQuery({
+    queryKey: queryKeys.members,
+    queryFn: () => apiFetch<{ members: MemberView[] }>("/api/members"),
   });
   const trigger = useMutation({
     mutationFn: ({
@@ -49,21 +49,21 @@ export default function ActionsPage() {
     onError: (error: Error) => message.error(error.message),
   });
 
-  if (targets.isError)
+  if (members.isError)
     return (
       <Result
         status="500"
-        title="Target 目录读取失败"
-        subTitle={targets.error.message}
+        title="成员目录读取失败"
+        subTitle={members.error.message}
       />
     );
   const options =
-    targets.data?.catalog.flatMap((member) =>
+    members.data?.members.flatMap((member) =>
       member.skills.map((skill) => ({
         label: (
           <span>
             {skill.name || skill.id} · {member.name || member.agentId}{" "}
-            <Tag color={member.online ? "success" : "default"}>
+            <Tag color={member.online ? "success" : "warning"}>
               {member.online ? "在线" : "离线"}
             </Tag>
           </span>

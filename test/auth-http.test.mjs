@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { createHub } from "../src/main.mjs";
 import { createAuth } from "../src/auth.mjs";
+import { PRODUCT_VERSION } from "../src/version.mjs";
 
 const ORIGIN = "http://test.local";
 
@@ -136,6 +137,7 @@ test("HTTP 身份闭环：setup → session → 用户/角色/PAT → logout", a
       headers: { Authorization: `Bearer ${issued.token}` },
     });
     assert.equal(response.status, 200);
+    assert.equal((await response.json()).version, PRODUCT_VERSION);
 
     response = await fetch(`${base}/api/trigger`, {
       method: "POST",

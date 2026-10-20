@@ -18,13 +18,12 @@
 import { createServer } from "node:http";
 import { readBody, readJson, sendJson, parseBearer } from "./http-helpers.mjs";
 import { createStaticSite } from "./static-site.mjs";
+import { PRODUCT_VERSION } from "./version.mjs";
 import {
-  authenticateAgentToken,
   hashAgentToken,
-  issueAgentToken,
   normalizeAgentId,
-  revokeAgentToken,
 } from "./agent-auth.mjs";
+import { listMemberViews } from "./members.mjs";
 
 const JSONRPC_ERRORS = {
   TASK_NOT_FOUND: { code: -32001, message: "Task not found" },
@@ -43,6 +42,7 @@ export function startServer({
   identity,
   auth,
   artifacts,
+  members, // 成员目录（members.mjs）：成员身份与接入凭据的持久化 SSOT
   validate,
   delegate, // async ({ task, vars, cancel }) => { ok, reason } —— 隧道下发钩子（tunnel.mjs 提供）
   resumeTask, // ({ task, actor }) => boolean —— 审批门恢复钩子（M4 F3：input-required → 继续执行）
@@ -87,6 +87,15 @@ export function startServer({
     } catch (error) {
       log.error?.(`审计落盘失败：${error.message}`);
     }
+  }
+
+  /** 成员被移除后同步清理在场状态：断开连接并从注册表摘除，避免僵尸成员继续出现在聚合 card 里。 */
+  function evictMember(agentId) {
+    const member = registry.connected?.(agentId);
+    if (member?.conn) {
+      try { member.conn.close(1008, "member-removed"); } catch { /* noop */ }
+    }
+    registry.remove?.(agentId);
   }
 
   function actorForRequest(req, principal) {
@@ -661,19 +670,27 @@ export function startServer({
         return;
       }
 
-      if (req.method === "GET" && pathname === "/api/agent-credentials") {
-        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false });
+      if (req.method === "GET" && pathname === "/api/members") {
+        const authn = await requirePrincipal(req, res, "targets.read");
         if (!authn) return;
-        if (authn.principal.role.id !== "superadmin") {
-          sendJson(res, 403, { error: "forbidden" });
-          return;
-        }
-        sendJson(res, 200, { agentIds: Object.keys(secrets.get("agentTokenHashes")).sort() });
+        // 凭据视图与签发/吊销保持同一道门（superadmin）；admin 能管人但不能碰 agent 凭据。
+        const seesCredentials = authn.principal.role.id === "superadmin";
+        const seesAllTargets = identity.hasGlobalTargetAccess(authn.principal);
+        sendJson(res, 200, {
+          members: listMemberViews({
+            directory: members,
+            registry,
+            includeCredentials: seesCredentials,
+            skillAllowed: seesAllTargets
+              ? null
+              : (agentId, skillId) => identity.targetAllowed(authn.principal, agentId, skillId),
+          }),
+        });
         return;
       }
 
-      const agentCredentialMatch = pathname.match(/^\/api\/agent-credentials\/([^/]+)$/);
-      if ((req.method === "POST" || req.method === "DELETE") && agentCredentialMatch) {
+      const memberRoute = pathname.match(/^\/api\/members\/([^/]+)$/);
+      if ((req.method === "POST" || req.method === "DELETE") && memberRoute) {
         const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
         if (!authn) return;
         if (authn.principal.role.id !== "superadmin") {
@@ -681,26 +698,30 @@ export function startServer({
           return;
         }
         try {
-          const agentId = normalizeAgentId(decodeURIComponent(agentCredentialMatch[1]));
+          const agentId = normalizeAgentId(decodeURIComponent(memberRoute[1]));
           if (req.method === "DELETE") {
-            const revoked = revokeAgentToken(secrets, agentId);
+            const existed = members.remove(agentId);
+            if (existed) evictMember(agentId);
             auditLine({
               target: "hub",
               outcome: "completed",
-              detail: { reason: "agent-token-revoked", agentId, existed: revoked },
+              detail: { reason: "agent-token-revoked", agentId, existed },
             }, authn.principal.actor, "ops");
-            sendJson(res, 200, { ok: true, agentId, revoked });
-          } else {
-            const token = issueAgentToken();
-            const hashes = secrets.get("agentTokenHashes");
-            secrets.set({ agentTokenHashes: { ...hashes, [agentId]: hashAgentToken(token) } });
-            auditLine({
-              target: "hub",
-              outcome: "completed",
-              detail: { reason: "agent-token-issued", agentId, replaced: Object.hasOwn(hashes, agentId) },
-            }, authn.principal.actor, "ops");
-            sendJson(res, 201, { agentId, token });
+            sendJson(res, 200, { ok: true, agentId, removed: existed });
+            return;
           }
+          const issued = members.issue(agentId);
+          auditLine({
+            target: "hub",
+            outcome: "completed",
+            detail: { reason: "agent-token-issued", agentId, rotated: issued.rotated },
+          }, authn.principal.actor, "ops");
+          sendJson(res, issued.rotated ? 200 : 201, {
+            agentId,
+            token: issued.token,
+            rotated: issued.rotated,
+            tokenLastFour: issued.member.tokenLastFour,
+          });
         } catch (error) {
           sendIdentityError(res, error);
         }
@@ -709,7 +730,7 @@ export function startServer({
 
       if (req.method === "GET" && pathname === "/api/cards") {
         const token = parseBearer(req.headers.authorization);
-        const agentId = token ? authenticateAgentToken(secrets, token) : null;
+        const agentId = token ? members.authenticate(token) : null;
         if (!agentId) {
           sendJson(res, 401, { error: "agent token required" });
           return;
@@ -720,7 +741,7 @@ export function startServer({
 
       if (req.method === "POST" && pathname === "/api/artifacts") {
         const token = parseBearer(req.headers.authorization);
-        const agentId = token ? authenticateAgentToken(secrets, token) : null;
+        const agentId = token ? members.authenticate(token) : null;
         if (!agentId) {
           sendJson(res, 401, { error: "agent token required" });
           return;
@@ -1031,22 +1052,25 @@ export function startServer({
       if (req.method === "GET" && pathname === "/api/status") {
         const authn = await requirePrincipal(req, res, "system.read");
         if (!authn) return;
-        const visibleSkillCounts = new Map(
-          registry.catalog()
-            .map((member) => [
-              member.agentId,
-              (member.skills ?? []).filter((skill) =>
-                identity.targetAllowed(authn.principal, member.agentId, skill.id)).length,
-            ])
-            .filter(([, count]) => count > 0),
-        );
+        const seesAllTargets = identity.hasGlobalTargetAccess(authn.principal);
+        const views = listMemberViews({
+          directory: members,
+          registry,
+          skillAllowed: seesAllTargets
+            ? null
+            : (agentId, skillId) => identity.targetAllowed(authn.principal, agentId, skillId),
+        });
         const tasks = queue.list().filter((task) => identity.targetAllowed(authn.principal, task.member, task.target));
         const body = {
-          version: process.env.NOVOARD_VERSION ?? "dev",
+          version: PRODUCT_VERSION,
           startedAt: server.startedAt ?? null,
-          members: registry.status()
-            .filter((member) => visibleSkillCounts.has(member.agentId))
-            .map((member) => ({ ...member, skillCount: visibleSkillCounts.get(member.agentId) })),
+          members: views.map((member) => ({
+            agentId: member.agentId,
+            name: member.name,
+            online: member.online,
+            registered: member.registered,
+            skillCount: member.skillCount,
+          })),
           tasks: {
             total: tasks.length,
             active: tasks.filter((t) => !queue.isTerminal(t.state)).length,
@@ -1060,11 +1084,26 @@ export function startServer({
       if (req.method === "GET" && pathname === "/api/targets") {
         const authn = await requirePrincipal(req, res, "targets.read");
         if (!authn) return;
-        const catalog = registry.catalog().map((member) => ({
-          ...member,
-          skills: (member.skills ?? []).filter((skill) => identity.targetAllowed(authn.principal, member.agentId, skill.id)),
-        })).filter((member) => member.skills.length > 0);
-        sendJson(res, 200, { catalog });
+        // 兼容视图：结构与 /api/members 同源（成员目录 + 在场层），仅裁剪成本端点历史字段名。
+        // 保留它是为了不让既有调用方（快捷操作页、外部脚本）因 SSOT 收口而断裂。
+        const seesAllTargets = identity.hasGlobalTargetAccess(authn.principal);
+        const views = listMemberViews({
+          directory: members,
+          registry,
+          skillAllowed: seesAllTargets
+            ? null
+            : (agentId, skillId) => identity.targetAllowed(authn.principal, agentId, skillId),
+        });
+        sendJson(res, 200, {
+          catalog: views
+            .filter((member) => member.skills.length > 0)
+            .map((member) => ({
+              agentId: member.agentId,
+              name: member.name,
+              online: member.online,
+              skills: member.skills,
+            })),
+        });
         return;
       }
 

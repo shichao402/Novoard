@@ -324,8 +324,10 @@ JSONL 事件流水（issue-handler 同款模式），每行一事件：
 
 ### 8.3 agent 凭据
 
-- agent token 前缀 `nva_`，hub 的 0600 私密配置仅保存 `agentId → sha256(token)`；明文只在超级管理员创建/轮换凭据时返回一次
-- token 只允许 WebSocket Upgrade 与 artifact 上传，不能充当用户/PAT。吊销后新连接和上传立即 401；已建立连接在断线重连时失效。本机 secrets 字段未落盘时才读取环境变量，管理面显式清空会持久化空值墓碑，不能因环境变量回退而复活已撤销 token 或白名单
+- agent token 前缀 `nva_`。成员身份（agentId、凭据哈希、签发时间）持久化在 hub 的 0600 `members.json`，是成员概念的唯一 SSOT；明文只在超级管理员签发/轮换时返回一次，落盘只存 `sha256(token)` 与末四位
+- 成员与在线状态是两层：`members.json` 回答"谁是成员"，运行期注册表只回答"此刻谁连着"。面板成员列表、`/api/members` 与 `/api/status` 的 members 一律以成员目录为行、注册表为覆盖层，因此"已签发但从未接入"的成员同样可见、可轮换、可吊销，不会因离线或 hub 重启而消失
+- 管理面：`GET /api/members` 返回成员视图（凭据字段仅 superadmin 可见）；`POST /api/members/:agentId` 签发或轮换（201 新建 / 200 轮换）；`DELETE /api/members/:agentId` 吊销并同步摘除在线 card。吊销后该 agentId 的 WebSocket Upgrade 与 artifact 上传立即 401，已建立连接在断线重连时失效
+- token 只允许 WebSocket Upgrade 与 artifact 上传，不能充当用户/PAT。成员凭据不读取环境变量（`NOVOARD_AGENT_TOKEN_HASHES` 已废弃）；升级时若旧 `secrets.json` 仍含 `agentTokenHashes`，启动会一次性导入 `members.json` 并摘除该字段，已有同名成员不被覆盖
 - JWS/card 签名仍属后续强化项；v2.0 的身份边界以 TLS + 绑定 agentId 的 Bearer token + 每帧 task/member 校验为准
 
 ## 9. schemas 目录（机器可校验的 SSOT）

@@ -12,6 +12,7 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --registry=https://mirrors.tencent.com/npm
+COPY VERSION.json ./
 COPY src/ src/
 COPY docs/architecture/schemas/ docs/architecture/schemas/
 COPY --from=web-build /web/dist/ web/dist/

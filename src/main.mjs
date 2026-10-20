@@ -4,7 +4,7 @@
  * 装配时序：先建 tunnel 的 delegate（下发/取消走隧道），再传给 HTTP server —— server 是同步
  * startServer 返回 listen Promise，delegate 以 getter 注入避免 Promise 时序问题。
  */
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { createFrameValidator } from "./frames.mjs";
@@ -12,6 +12,7 @@ import { createAuditLog } from "./audit.mjs";
 import { createTaskQueue } from "./queue.mjs";
 import { createRegistry } from "./registry.mjs";
 import { createSecrets } from "./secrets.mjs";
+import { createMemberDirectory } from "./members.mjs";
 import { createIdentityStore } from "./identity.mjs";
 import { createAuth } from "./auth.mjs";
 import { createArtifacts } from "./artifacts.mjs";
@@ -47,6 +48,8 @@ export async function createHub({
   const audit = createAuditLog({ dir: auditDir });
   const queue = createTaskQueue({ dir: queueDir });
   const registry = createRegistry({ validate, log });
+  const members = createMemberDirectory({ dir: stateDir });
+  const migratedMembers = migrateLegacyAgentTokens({ secrets, members, log });
   const artifacts = createArtifacts({ dir: artifactsDir });
   const wecomBot = createWecomBot({
     secrets,
@@ -243,6 +246,7 @@ export async function createHub({
     identity,
     auth,
     artifacts,
+    members,
     validate,
     delegate,
     resumeTask,
@@ -254,7 +258,7 @@ export async function createHub({
   });
 
   const httpServer = await serverPromise;
-  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, secrets, artifacts, validate, notify: notifyAndRules, log });
+  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, artifacts, members, validate, notify: notifyAndRules, log });
   tunnelDelegate = tunnel.delegate;
 
   // 成员上线钩子：tunnel hello 注册成功后补下发该成员的 queued-offline 任务
@@ -301,6 +305,8 @@ export async function createHub({
     identity,
     auth,
     artifacts,
+    members,
+    migratedMembers,
     validate,
     notify: notifyAndRules,
     notifyImpl: notify,
@@ -317,11 +323,66 @@ export function main() {
     const port = hub.server.address?.().port ?? process.env.NOVOARD_PORT ?? 38666;
     console.log(`Novoard hub 已启动：http://0.0.0.0:${port}`);
     console.log("  dashboard: /    tunnel: /tunnel (ws)    a2a: /a2a    card: /.well-known/agent-card.json");
+    if (hub.migratedMembers?.length) {
+      console.log(`  [members] 已从 secrets.json 迁移 ${hub.migratedMembers.length} 个成员凭据：${hub.migratedMembers.join(", ")}`);
+    }
     const pending = hub.queue.pendingAfterReboot();
     if (pending.length) {
       console.log(`  [重启重放] ${pending.length} 个未终态任务已恢复到内存索引，等待 agent 重连对账`);
     }
   });
+}
+
+/**
+ * 一次性迁移：旧版本把 agentId → tokenHash 放在 secrets.json 的 agentTokenHashes。
+ * 导入成员目录后摘除该字段，让成员凭据只有一个来源。幂等：成员目录已有同名成员时不覆盖。
+ * 直接读原始 JSON（而非 secrets.get），因为该字段已不在 secrets 的已知字段集合里。
+ */
+function migrateLegacyAgentTokens({ secrets, members, log = console }) {
+  const file = secrets.file;
+  let legacy = null;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8"));
+    legacy = parsed?.agentTokenHashes ?? null;
+  } catch {
+    return [];
+  }
+  if (!legacy || typeof legacy !== "object" || Array.isArray(legacy) || Object.keys(legacy).length === 0) {
+    return [];
+  }
+  let imported = [];
+  try {
+    imported = members.importLegacyHashes(legacy);
+  } catch (error) {
+    log.error?.(`[members] 历史令牌迁移失败，保留 secrets.json 原状：${error.message}`);
+    return [];
+  }
+  try {
+    // drop 只认已知字段，这里用底层写入摘除：先读全量、删键、再原子写回。
+    removeSecretField(secrets, "agentTokenHashes");
+  } catch (error) {
+    log.error?.(`[members] 摘除 secrets.json 历史字段失败：${error.message}`);
+  }
+  if (imported.length) log.info?.(`[members] 迁移 ${imported.length} 个历史 agent 令牌到 members.json`);
+  return imported;
+}
+
+/** 从 secrets.json 摘除一个已废弃字段（保持其余字段与权限不变）。 */
+function removeSecretField(secrets, field) {
+  const file = secrets.file;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (!Object.hasOwn(parsed, field)) return;
+  delete parsed[field];
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  renameSync(temp, file);
+  chmodSync(file, 0o600);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

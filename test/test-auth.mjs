@@ -28,10 +28,12 @@ export async function bootstrapTestAuth(hub, {
   };
 }
 
+/**
+ * 测试专用：把 agentId → 明文 token 写进成员目录（只存哈希，与生产签发路径同构）。
+ * 走 members.adoptTokenHash 而不是直接改 secrets，保证测试与运行期共用同一个 SSOT。
+ */
 export function configureTestAgentTokens(hub, tokensByAgent) {
-  hub.secrets.set({
-    agentTokenHashes: Object.fromEntries(
-      Object.entries(tokensByAgent).map(([agentId, token]) => [agentId, hashAgentToken(token)]),
-    ),
-  });
+  for (const [agentId, token] of Object.entries(tokensByAgent)) {
+    hub.members.adoptTokenHash(agentId, hashAgentToken(token));
+  }
 }

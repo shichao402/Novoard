@@ -9,10 +9,10 @@ export const queryKeys = {
   pats: ["pats"] as const,
   tasks: ["tasks"] as const,
   targets: ["targets"] as const,
+  members: ["members"] as const,
   events: ["events"] as const,
   status: ["status"] as const,
   wecom: ["wecom"] as const,
-  agentCredentials: ["agent-credentials"] as const,
 };
 
 export function useSetupStatus() {

@@ -4,12 +4,18 @@ on:
   push:
     tags:
       - "v*"
+      - "stable"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   contract-gate:
+    if: github.event.deleted == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +29,122 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix web
       - run: npm --prefix web exec -- playwright install --with-deps chromium
+      - name: Verify release tag matches VERSION.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm run version:check -- --tag "$GITHUB_REF_NAME"
       - run: npm run test:all
       - run: docker build -f deploy/Dockerfile .
       - name: Note
         run: echo 'hub release gates passed; agent binaries are released from novoard-agent'
+
+  deploy-stable:
+    if: github.ref == 'refs/tags/stable' && github.event.deleted == false
+    needs: contract-gate
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://novoard.firoyang.com/
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: /opt/novoard
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure stable points to the versioned main commit
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::stable must point to a commit reachable from main"
+            exit 1
+          fi
+
+          version="$(node -p "require('./package.json').version")"
+          version_tag="v${version}"
+          if ! git rev-parse --verify --quiet "refs/tags/${version_tag}^{commit}" >/dev/null; then
+            echo "::error::stable requires the immutable ${version_tag} tag"
+            exit 1
+          fi
+          if [ "$(git rev-list -n 1 "${version_tag}")" != "$GITHUB_SHA" ]; then
+            echo "::error::stable and ${version_tag} must point to the same commit"
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?production variable DEPLOY_HOST is required}"
+          : "${DEPLOY_PORT:?production variable DEPLOY_PORT is required}"
+          : "${DEPLOY_USER:?production variable DEPLOY_USER is required}"
+          : "${DEPLOY_SSH_KEY:?production secret DEPLOY_SSH_KEY is required}"
+          : "${DEPLOY_KNOWN_HOSTS:?production secret DEPLOY_KNOWN_HOSTS is required}"
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/novoard_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/novoard_deploy" "$HOME/.ssh/known_hosts"
+
+          cat > "$HOME/.ssh/config" <<EOF
+          Host novoard-production
+            HostName ${DEPLOY_HOST}
+            User ${DEPLOY_USER}
+            Port ${DEPLOY_PORT}
+            IdentityFile ~/.ssh/novoard_deploy
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            ConnectTimeout 15
+          EOF
+          chmod 600 "$HOME/.ssh/config"
+
+          ssh novoard-production true
+
+      - name: Sync source
+        run: |
+          set -euo pipefail
+          test "$DEPLOY_PATH" = "/opt/novoard"
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='node_modules/' \
+            --exclude='web/node_modules/' \
+            --exclude='.state/' \
+            --exclude='deploy/.state/' \
+            ./ "novoard-production:${DEPLOY_PATH}/"
+
+      - name: Rebuild and restart hub
+        run: |
+          set -euo pipefail
+          ssh novoard-production bash -se -- "$GITHUB_SHA" <<'REMOTE'
+          set -euo pipefail
+          revision=$1
+          cd /opt/novoard/deploy
+          install -d -m 700 .state
+          docker compose up -d --build --remove-orphans
+
+          for attempt in {1..30}; do
+            if curl -fsS --max-time 5 \
+              http://127.0.0.1:38666/api/setup/status >/dev/null; then
+              printf '%s\n' "$revision" > /opt/novoard/.deploy-revision
+              docker compose ps
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker compose ps >&2
+          docker compose logs --tail=100 novoard-hub >&2
+          exit 1
+          REMOTE
+
+      - name: Verify public endpoint
+        run: |
+          curl --fail --silent --show-error \
+            --retry 10 --retry-all-errors --retry-delay 3 --max-time 15 \
+            https://novoard.firoyang.com/api/setup/status

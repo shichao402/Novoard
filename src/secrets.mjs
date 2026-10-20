@@ -2,6 +2,9 @@
  * 本机私密配置：字段未落盘时才回退环境变量；显式空值作为撤销墓碑保留。
  * 写入采用临时文件 + rename，权限 0600。
  * 用户 PAT 只在 identity.json 存哈希；企微消费端是唯一需要保留服务 PAT 明文的本地组件。
+ *
+ * 边界：agent 成员的接入凭据（agentId → token 哈希）不在这里，见 members.mjs。
+ * 这里只放"单值 / 列表形态的本机集成配置"；成员是带生命周期的实体，需要自己的 SSOT。
  */
 import {
   chmodSync,
@@ -30,7 +33,6 @@ const STRING_FIELDS = [
   "barkDeviceKey",
 ];
 const LIST_FIELDS = ["wecomAllowedUserIds", "wecomAllowedChatIds"];
-const MAP_FIELDS = ["agentTokenHashes"];
 const ENV_KEYS = {
   wecomWebhook: "NOVOARD_WECOM_WEBHOOK",
   wecomBotId: "NOVOARD_WECOM_BOT_ID",
@@ -42,8 +44,11 @@ const ENV_KEYS = {
   wecomAllowedChatIds: "NOVOARD_WECOM_ALLOWED_CHAT_IDS",
   barkUrl: "NOVOARD_BARK_URL",
   barkDeviceKey: "NOVOARD_BARK_DEVICE_KEY",
-  agentTokenHashes: "NOVOARD_AGENT_TOKEN_HASHES",
 };
+
+function isKnownField(field) {
+  return STRING_FIELDS.includes(field) || LIST_FIELDS.includes(field);
+}
 
 export function createSecrets({ dir, env = process.env } = {}) {
   if (!dir) throw new Error("SecretsManager 需要 dir");
@@ -77,42 +82,40 @@ export function createSecrets({ dir, env = process.env } = {}) {
     return LIST_FIELDS.includes(field);
   }
 
-  function isMap(field) {
-    return MAP_FIELDS.includes(field);
-  }
-
-  function toAgentTokenHashes(value) {
-    let parsed = value;
-    if (typeof value === "string" && value.trim()) {
+  function persist(data) {
+    mkdirSync(dirname(file), { recursive: true });
+    const temp = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+    let descriptor;
+    try {
+      descriptor = openSync(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
+      writeFileSync(descriptor, `${JSON.stringify(data, null, 2)}\n`);
+      fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = undefined;
+      renameSync(temp, file);
+      chmodSync(file, 0o600);
+      const directory = openSync(dirname(file), fsConstants.O_RDONLY);
       try {
-        parsed = JSON.parse(value);
+        fsyncSync(directory);
       } catch (error) {
-        throw new Error(`agentTokenHashes 必须是 JSON 对象：${error.message}`);
+        if (error?.code !== "EPERM" && error?.code !== "EINVAL") throw error;
+      } finally {
+        closeSync(directory);
       }
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+      rmSync(temp, { force: true });
     }
-    if (parsed === undefined || parsed === null || parsed === "") return {};
-    if (typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("agentTokenHashes 必须是对象");
-    const out = {};
-    for (const [agentId, hash] of Object.entries(parsed)) {
-      if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(agentId) || !/^[a-f0-9]{64}$/.test(String(hash))) {
-        throw new Error(`agentTokenHashes 包含非法条目：${agentId}`);
-      }
-      out[agentId] = String(hash);
-    }
-    return out;
   }
 
   return {
     get(field) {
-      if (!STRING_FIELDS.includes(field) && !LIST_FIELDS.includes(field) && !MAP_FIELDS.includes(field)) {
+      if (!isKnownField(field)) {
         throw new Error(`未知凭据字段：${field}`);
       }
       const data = loadFile();
       const hasFileValue = Object.hasOwn(data, field);
       const fromFile = hasFileValue ? data[field] : env[ENV_KEYS[field]];
-      if (isMap(field)) {
-        return toAgentTokenHashes(fromFile);
-      }
       if (isList(field)) {
         return toList(fromFile);
       }
@@ -121,57 +124,37 @@ export function createSecrets({ dir, env = process.env } = {}) {
     set(values) {
       const data = loadFile();
       for (const [key, value] of Object.entries(values ?? {})) {
-        if (!STRING_FIELDS.includes(key) && !LIST_FIELDS.includes(key) && !MAP_FIELDS.includes(key)) {
+        if (!isKnownField(key)) {
           throw new Error(`未知凭据字段：${key}`);
         }
-        if (isMap(key)) {
-          data[key] = toAgentTokenHashes(value);
-        } else if (isList(key)) {
-          data[key] = toList(value);
-        } else {
-          data[key] = norm(value);
-        }
+        data[key] = isList(key) ? toList(value) : norm(value);
       }
-      mkdirSync(dirname(file), { recursive: true });
-      const temp = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-      let descriptor;
-      try {
-        descriptor = openSync(temp, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY, 0o600);
-        writeFileSync(descriptor, `${JSON.stringify(data, null, 2)}\n`);
-        fsyncSync(descriptor);
-        closeSync(descriptor);
-        descriptor = undefined;
-        renameSync(temp, file);
-        chmodSync(file, 0o600);
-        const directory = openSync(dirname(file), fsConstants.O_RDONLY);
-        try {
-          fsyncSync(directory);
-        } catch (error) {
-          if (error?.code !== "EPERM" && error?.code !== "EINVAL") throw error;
-        } finally {
-          closeSync(directory);
-        }
-      } finally {
-        if (descriptor !== undefined) closeSync(descriptor);
-        rmSync(temp, { force: true });
-      }
+      persist(data);
+    },
+    /** 摘除历史遗留字段（一次性迁移用）：返回被摘除的值。 */
+    drop(field) {
+      const data = loadFile();
+      if (!Object.hasOwn(data, field)) return undefined;
+      const removed = data[field];
+      delete data[field];
+      persist(data);
+      return removed;
     },
     has(field) {
       const value = this.get(field);
-      return Array.isArray(value) ? value.length > 0 : typeof value === "object" ? Object.keys(value).length > 0 : !!value;
+      return Array.isArray(value) ? value.length > 0 : !!value;
     },
     /** 脱敏视图（dashboard /api/status 用）。 */
     view() {
       const out = {};
-      for (const field of [...STRING_FIELDS, ...LIST_FIELDS, ...MAP_FIELDS]) {
+      for (const field of [...STRING_FIELDS, ...LIST_FIELDS]) {
         const value = this.get(field);
         out[field] = Array.isArray(value)
           ? { configured: value.length > 0, count: value.length }
-          : typeof value === "object"
-            ? { configured: Object.keys(value).length > 0, count: Object.keys(value).length }
-            : { configured: !!value };
+          : { configured: !!value };
       }
       return out;
     },
+    file,
   };
 }

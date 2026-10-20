@@ -9,7 +9,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,6 +18,7 @@ import { createTaskQueue } from "../src/queue.mjs";
 import { createRegistry } from "../src/registry.mjs";
 import { createAuditLog } from "../src/audit.mjs";
 import { createSecrets } from "../src/secrets.mjs";
+import { createMemberDirectory } from "../src/members.mjs";
 import { startServer } from "../src/server.mjs";
 import { attachTunnel } from "../src/tunnel.mjs";
 import { createHub } from "../src/main.mjs";
@@ -132,41 +133,95 @@ test("secrets：本机私密配置、列表字段与环境回退", () => {
   const s = createSecrets({
     dir,
     env: {
-      NOVOARD_AGENT_TOKEN_HASHES: JSON.stringify({
-        "mac-work": hashAgentToken("agt_a"),
-        "mac-home": hashAgentToken("agt_b"),
-      }),
       NOVOARD_WECOM_ALLOWED_USER_IDS: "U1,U2",
       NOVOARD_WECOM_NOTIFY_CHAT_ID: "wr-notify",
     },
-  });
-  assert.deepEqual(s.get("agentTokenHashes"), {
-    "mac-work": hashAgentToken("agt_a"),
-    "mac-home": hashAgentToken("agt_b"),
   });
   assert.deepEqual(s.get("wecomAllowedUserIds"), ["U1", "U2"]);
   assert.equal(s.get("wecomNotifyChatId"), "wr-notify");
   assert.equal(s.has("wecomWebhook"), false);
   s.set({ wecomAllowedChatIds: ["wr-one"] });
   assert.deepEqual(s.get("wecomAllowedChatIds"), ["wr-one"]);
-  s.set({ agentTokenHashes: {}, wecomAllowedUserIds: [], wecomNotifyChatId: "" });
-  assert.deepEqual(s.get("agentTokenHashes"), {}, "显式撤销后不得回退环境变量 token");
+  s.set({ wecomAllowedUserIds: [], wecomNotifyChatId: "" });
   assert.deepEqual(s.get("wecomAllowedUserIds"), [], "显式空白名单不得回退环境变量");
   assert.equal(s.get("wecomNotifyChatId"), "", "显式空字符串不得回退环境变量");
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("secrets：agentId → tokenHash 映射严格校验", () => {
+test("members：签发 / 轮换 / 移除与鉴权，成员身份不随在线状态消失", () => {
   const dir = tmpStateDir();
-  writeFileSync(join(dir, "secrets.json"), JSON.stringify({
-    agentTokenHashes: {
-      "mac-work": hashAgentToken("agt_macwork_token_123456"),
-      "mac-home": hashAgentToken("agt_machome_token_654321"),
-    },
+  const dir1 = createMemberDirectory({ dir });
+
+  const issued = dir1.issue("mac-work");
+  assert.equal(issued.rotated, false);
+  assert.match(issued.token, /^nva_/);
+  assert.equal(issued.member.tokenLastFour, issued.token.slice(-4));
+  assert.deepEqual(dir1.list().map((m) => m.agentId), ["mac-work"]);
+
+  // 鉴权只认哈希；未签发的 token 一律 null
+  assert.equal(dir1.authenticate(issued.token), "mac-work");
+  assert.equal(dir1.authenticate("nva_deadbeef_nope"), null);
+
+  // 进程重启（新实例读同一目录）后成员仍在，且旧 token 依然有效 → 身份已持久化
+  const dir2 = createMemberDirectory({ dir });
+  assert.equal(dir2.authenticate(issued.token), "mac-work", "重启后成员身份必须保留");
+
+  // 轮换：旧 token 立即失效，新 token 生效，createdAt 不变
+  const rotated = dir2.issue("mac-work");
+  assert.equal(rotated.rotated, true);
+  assert.equal(rotated.member.createdAt, issued.member.createdAt, "轮换不重置成员创建时间");
+  assert.notEqual(rotated.token, issued.token);
+  assert.equal(dir2.authenticate(issued.token), null, "旧 token 轮换后必须失效");
+  assert.equal(dir2.authenticate(rotated.token), "mac-work");
+
+  // 移除：凭据与记录一并消失
+  assert.equal(dir2.remove("mac-work"), true);
+  assert.equal(dir2.remove("mac-work"), false, "重复移除幂等返回 false");
+  assert.deepEqual(dir2.list(), []);
+  assert.equal(dir2.authenticate(rotated.token), null);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("members：损坏或未规范化的 members.json 一律 fail-closed", () => {
+  const dir = tmpStateDir();
+  const d = createMemberDirectory({ dir });
+  d.issue("mac-work");
+
+  const file = join(dir, "members.json");
+  const good = JSON.parse(readFileSync(file, "utf8"));
+
+  writeFileSync(file, JSON.stringify({ ...good, schemaVersion: 99 }));
+  assert.throws(() => createMemberDirectory({ dir }).list(), /schemaVersion 不支持/);
+
+  writeFileSync(file, JSON.stringify({
+    ...good,
+    members: { "mac-work": { ...good.members["mac-work"], tokenHash: "not-a-hash" } },
   }));
-  const s = createSecrets({ dir, env: {} });
-  assert.deepEqual(Object.keys(s.get("agentTokenHashes")), ["mac-work", "mac-home"]);
-  assert.equal(s.has("agentTokenHashes"), true);
+  assert.throws(() => createMemberDirectory({ dir }).list(), /非法成员记录/);
+
+  writeFileSync(file, JSON.stringify({
+    ...good,
+    members: { "Bad_Id": { ...good.members["mac-work"], agentId: "Bad_Id" } },
+  }));
+  assert.throws(() => createMemberDirectory({ dir }).list(), /非法成员记录/);
+
+  writeFileSync(file, "{ not json");
+  assert.throws(() => createMemberDirectory({ dir }).list(), /members\.json 损坏/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("members：历史 secrets agentTokenHashes 可导入且不覆盖既有成员", () => {
+  const dir = tmpStateDir();
+  const d = createMemberDirectory({ dir });
+  d.issue("mac-work");
+
+  const imported = d.importLegacyHashes({
+    "mac-work": hashAgentToken("legacy-token-for-work"),
+    "mac-home": hashAgentToken("legacy-token-for-home"),
+  });
+  assert.deepEqual(imported, ["mac-home"], "已存在的成员不被历史记录覆盖");
+  assert.equal(d.authenticate("legacy-token-for-home"), "mac-home");
+  assert.equal(d.authenticate("legacy-token-for-work"), null, "既有成员凭据保持不变");
   rmSync(dir, { recursive: true, force: true });
 });
 

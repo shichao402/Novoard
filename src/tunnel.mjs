@@ -8,7 +8,6 @@
 import { WebSocketServer } from "ws";
 import { lostMessage } from "./queue.mjs";
 import { newMsgId } from "./registry.mjs";
-import { authenticateAgentToken } from "./agent-auth.mjs";
 
 export const CONTRACT_VERSION = "2.1";
 const PING_INTERVAL_MS = 30_000;
@@ -16,7 +15,7 @@ const PING_TIMEOUT_MS = 60_000;
 const AGENT_REPORTED_STATES = new Set(["working", "input-required", "completed", "failed", "canceled"]);
 const LOCAL_MIRROR_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 
-export function attachTunnel({ server, registry, queue, audit, secrets, artifacts, validate, notify, log = console }) {
+export function attachTunnel({ server, registry, queue, audit, artifacts, members, validate, notify, log = console }) {
   const wss = new WebSocketServer({ noServer: true });
   const authenticatedAgentId = new WeakMap();
   /** 成员上线钩子（M2）：main 装配层赋值 tunnel.onMemberOnline = fn 注入；hello 注册成功后调用。 */
@@ -30,7 +29,7 @@ export function attachTunnel({ server, registry, queue, audit, secrets, artifact
       return;
     }
     const token = bearerOf(req.headers.authorization);
-    const agentId = token ? authenticateAgentToken(secrets, token) : null;
+    const agentId = token ? members.authenticate(token) : null;
     if (!agentId) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();

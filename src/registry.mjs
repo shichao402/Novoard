@@ -1,7 +1,14 @@
 /**
- * 联邦注册表（契约 §2 §3）：成员 card、路由查表（ADR-0005：路由不判断只查表）。
+ * 联邦注册表（契约 §2 §3）：在场状态与路由查表（ADR-0005：路由不判断只查表）。
+ *
+ * 定位：本模块是成员身份的**派生态**，不是 SSOT。谁是成员、持有什么凭据由 members.mjs 持久化；
+ * 这里的 members Map 只反映"当前进程内已知 card 与连接"，进程重启即清空，靠 agent 重连重建。
+ * 因此面板一律以成员目录为行、本表为覆盖层（见 members.mjs 的 listMemberViews），
+ * 不得反过来用本表当成员列表——那样会让"已签发但从未上线"的成员在界面上消失。
+ *
  * 断线语义：连接关闭 → 成员转 offline（card 与 skills 留在表内，离线触发因此能区分
  * "member-offline 拒绝"与"no-such-skill 404"，PRD-2 US3）；重连 hello 重新注册刷新 card。
+ * 移除语义：成员被吊销时由调用方显式 remove，连同 card 一起摘除。
  * 聚合 card = 所有成员 card 的 skills 并集 + x-novoard-members（契约 §2）。
  */
 import { randomUUID } from "node:crypto";
@@ -103,6 +110,14 @@ export function createRegistry({ validate, log = console } = {}) {
       const member = members.get(agentId);
       if (!member || member.conn) return null;
       return member.offlineSince ?? null;
+    },
+
+    /** 成员被移除（吊销凭据）：连同 card / skills 一并摘除，聚合 card 不再暴露。 */
+    remove(agentId) {
+      if (!members.has(agentId)) return false;
+      members.delete(agentId);
+      rebuildSkillIndex();
+      return true;
     },
 
     /** 路由查表：skillId → 在线承载成员；离线/查无均返回 null（调用方用 knows() 细分）。 */

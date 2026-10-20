@@ -98,11 +98,27 @@ export interface TargetSkill {
   tags?: string[];
 }
 
-export interface TargetMember {
+/** 成员接入凭据视图（仅 users.manage 可见）。 */
+export interface MemberCredentials {
+  configured: boolean;
+  lastFour: string | null;
+  issuedAt: string | null;
+  rotatedAt: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * 成员视图：/api/members 的返回项，身份来自 members.json（SSOT），
+ * online/registered/skills 是注册表在场层的覆盖，registered=false 表示"已签发但从未接入"。
+ */
+export interface MemberView {
   agentId: string;
   name: string;
   online: boolean;
+  registered: boolean;
+  skillCount: number;
   skills: TargetSkill[];
+  credentials?: MemberCredentials;
 }
 
 export interface TraceEvent {

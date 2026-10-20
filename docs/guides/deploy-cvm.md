@@ -31,6 +31,28 @@ curl -fsS http://127.0.0.1:38666/api/setup/status
 
 镜像会在第一阶段构建 React/Ant Design Pro 控制台，再把 `web/dist` 与原生 Node Hub 放入运行镜像。运行态位于 `deploy/.state`，其中 identity、sessions、secrets、queue、audit、artifacts 均不得提交仓库。
 
+### 后续发布
+
+产品版本唯一读取仓库根目录的 `VERSION.json`，格式与 Relkit 一致（`relkit.version/1`）。`package.json` 和 `package-lock.json` 中不带 build metadata 的版本只是生成镜像，禁止手工单独修改；修改 `VERSION.json` 后运行：
+
+```bash
+npm run version:sync
+npm run version:check
+```
+
+GitHub Actions 的 `release-hub` 工作流同时监听不可变版本 tag（必须等于 `v<VERSION.json.version>`）和固定的部署通道 tag `stable`。先推版本 tag 跑完发布门禁，再把 `stable` 移到同一提交触发生产部署：
+
+```bash
+version="$(node -p "JSON.parse(require('fs').readFileSync('VERSION.json', 'utf8')).version")"
+git tag "v${version}" <要发布的提交>
+git push origin "v${version}"
+# 等待门禁通过后：
+git tag -f stable "$(git rev-list -n 1 "v${version}")"
+git push origin refs/tags/stable --force
+```
+
+`stable` 必须指向 `main` 历史中的提交；契约测试、版本镜像校验、Web 测试和 Docker 构建全部通过后，工作流才会同步源码到 `/opt/novoard`、执行 `docker compose up -d --build`，并检查本机及公网入口。同步过程始终排除 `deploy/.state`。部署凭据仅配置在 GitHub `production` Environment：`DEPLOY_HOST`、`DEPLOY_PORT`、`DEPLOY_USER` 三个变量，以及 `DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS` 两个 secret。服务器授权使用独立部署密钥，不复用个人 SSH 私钥。
+
 ## 3. nginx 根路径
 
 将 `deploy/nginx-novoard.conf` 的 `location /` 放进 `novoard.firoyang.com` 的 HTTPS `server {}`。WebSocket Upgrade 使用宿主机已有的 `$connection_upgrade` map。
