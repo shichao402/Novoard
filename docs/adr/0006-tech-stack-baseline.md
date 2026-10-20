@@ -2,7 +2,7 @@
 
 - 状态：Accepted
 - 日期：2026-10-12
-- 修订：2026-10-12 agent 形态与留白项定稿时点依 ADR-0007 / PRD-5 更新（原"cronkit Electron 既有栈"改为 lite-agent，里程碑编号随 roadmap 重排调整）；同日 hub HTTP 框架与语言细节实测定稿（issue-handler 实为 `node:http` 零框架，候选 Fastify / Express / Hono 全部否决，回填已定项）；同日任务队列持久化定稿（JSONL 文件队列 + 扫尾重放，SQLite 否决：native 依赖链与 Docker Alpine 摩擦、单用户量级无查询瓶颈）；同日 A2A 实现定稿（自实现，不引入社区 SDK——A2A spec 语义未稳定，正式版发布后走契约 §0 变更流程评估跟进；至此 M1 动工前置留白项全部清零）；2026-10-13 lite-agent 语言定稿（Node，同族复用，`src/lite-agent/`；试点 target YAML 集合随落地顺序第 1 步落库 `agents/`）；2026-10-13 企微 bot 通道定稿；2026-10-15 Web 面板留白由 [ADR-0009](0009-hub-management-console.md) 关闭，Hub 后端仍为原生 `node:http`
+- 修订：2026-10-12 agent 形态与留白项定稿时点依 ADR-0007 / PRD-5 更新（原"cronkit Electron 既有栈"改为 lite-agent，里程碑编号随 roadmap 重排调整）；同日 hub HTTP 框架与语言细节实测定稿（issue-handler 实为 `node:http` 零框架，候选 Fastify / Express / Hono 全部否决，回填已定项）；同日任务队列持久化定稿（JSONL 文件队列 + 扫尾重放，SQLite 否决：native 依赖链与 Docker Alpine 摩擦、单用户量级无查询瓶颈）；同日 A2A 实现定稿（自实现，不引入社区 SDK——A2A spec 语义未稳定，正式版发布后走契约 §0 变更流程评估跟进；至此 M1 动工前置留白项全部清零）；2026-10-13 lite-agent 语言定稿（Node，同族复用，`src/lite-agent/`；试点 target YAML 集合随落地顺序第 1 步落库 `agents/`）；2026-10-13 企微 bot 通道定稿；2026-10-15 Web 面板留白由 [ADR-0009](0009-hub-management-console.md) 关闭，Hub 后端仍为原生 `node:http`；2026-10-20 试点 target 定义校验门禁迁至 novoard-agent 仓 `test/fixtures/`（口径：定义在产生它的一侧校验），本仓 `agents/` 目录已删除
 - 讨论来源：2026-10-12 PRD 与架构文档核对（技术栈确认讨论）
 
 ## Context

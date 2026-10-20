@@ -36,7 +36,6 @@ Novoard 是整个系统的产品仓库，承载：
 | [docs/roadmap](docs/roadmap/roadmap.md) | 里程碑 M0-M8 |
 | [docs/prd](docs/prd/README.md) | 产品需求文档（按能力域拆分） |
 | [docs/research](docs/research/0001-market-scan.md) | 外部调研：同类产品、业界参照、A2A 协议；扩展形态推演与接入调研 |
-| [agents](agents/mac-work/targets.yaml) | 试点 target 定义（三 agent 的 targets.yaml + stepTemplates，各 lite-agent 以本仓为上游同步） |
 
 ## 状态
 
