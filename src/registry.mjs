@@ -33,6 +33,22 @@ export function createRegistry({ validate, log = console } = {}) {
     }
   }
 
+  /**
+   * 按连接释放身份：只有当前绑定的那条连接关闭才转离线。
+   * 被新连接接管的旧连接稍后收到 close 时，`member.conn` 已不是它，返回 false 且不改状态
+   * ——否则旧连接的 close 会把仍在线的新连接成员误标离线。
+   * 不传 conn 时退化为"无条件转离线"，供 register 后未绑定连接的老调用点（测试桩）使用。
+   */
+  function releaseConn(agentId, conn) {
+    const member = members.get(agentId);
+    if (!member || !member.conn) return false;
+    if (conn && member.conn !== conn) return false; // 已被新连接接管，旧连接的 close 不再有语义
+    member.offlineSince = Date.now();
+    member.conn = null;
+    member.lastSeen = Date.now();
+    return true;
+  }
+
   return {
     /** agent.hello 注册 / 重连：card 校验 + skill 冲突检查（先到先得）。 */
     register({ agentId, card, conn = null, inFlightTaskIds = [] }) {
@@ -86,12 +102,8 @@ export function createRegistry({ validate, log = console } = {}) {
     },
 
     /** 连接关闭：转离线（不摘除——离线拒绝通知依赖 card 仍在表内）。 */
-    markOffline(agentId) {
-      const member = members.get(agentId);
-      if (!member) return;
-      if (member.conn) member.offlineSince = Date.now();
-      member.conn = null;
-      member.lastSeen = Date.now();
+    markOffline(agentId, conn) {
+      return releaseConn(agentId, conn);
     },
 
     /** 上一次 hello 记下的进程号。Hub 重启后为空，不落盘。 */

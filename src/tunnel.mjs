@@ -105,7 +105,12 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
     ws.on("close", () => {
       clearInterval(pingTimer);
       if (agentId) {
-        registry.markOffline(agentId); // 转离线不摘除：离线拒绝通知依赖 card 留表
+        const released = registry.markOffline(agentId, ws); // 转离线不摘除：离线拒绝通知依赖 card 留表
+        if (!released) {
+          // 这条连接已被同身份的新连接接管：不改在场状态，避免把在线成员误标离线
+          log.info?.(`agent ${agentId} 的旧连接已关闭（身份已由新连接接管，在场状态不变）`);
+          return;
+        }
         notify?.({ event: { kind: "member-event", target: agentId, state: "offline" } }); // M3：成员事件进通知面与规则源
         log.info?.(`agent ${agentId} 断开，已转离线`);
       }
@@ -168,6 +173,28 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
           outcome: "rejected",
           detail: { reason: "agent-identity-mismatch", claimedAgentId: body.agentId },
         }, validate.auditEvent);
+        return;
+      }
+      const live = registry.connected(body.agentId);
+      if (live && live.conn !== ws) {
+        // 同身份并发实例：拒绝新连接（不是踢旧连接）。
+        // 踢旧连接会让旧实例立刻退避重连、再踢回去，形成互踢循环；且旧实例在跑的任务
+        // 会被新 bootId 判成 agent-lost，机器上却照跑完，副作用却已上报失败。
+        // 旧连接若是僵尸（休眠/半开），hub 的 PING_TIMEOUT 会把它清掉，新实例退避重连即可接管。
+        sendEnvelope(ws, opsFrame({
+          type: "agent.hello.nack",
+          reason: "instance-conflict",
+          hubVersion: CONTRACT_VERSION,
+          retryable: true,
+        }));
+        audit.append({
+          actor: `agent:${body.agentId}`,
+          lane: "ops",
+          target: "hub",
+          outcome: "rejected",
+          detail: { reason: "instance-conflict", bootId: body.bootId ?? null },
+        }, validate.auditEvent);
+        log.info?.(`agent ${body.agentId} 已有在线实例，拒绝这条重复连接（等待其自行退避重连或旧连接心跳超时）`);
         return;
       }
       const result = registry.register({ agentId: body.agentId, card: body.card, conn: ws, inFlightTaskIds: body.inFlightTaskIds ?? [] });

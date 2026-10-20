@@ -146,6 +146,18 @@ steps:
 
 agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization: Bearer <agent token>`（§8）。每个 token 在 hub 端只对应一个 `agentId`；鉴权通过后连接即绑定该身份，后续 hello、card update、任务状态和 artifact 上行都不得切换或冒充其他 member。hub 不对 agent 开任何入站端口（ADR-0003 出站纪律）。
 
+同一 `agentId` 同一时刻只接受一条已注册连接。已存在在线连接时，新连接的 `agent.hello` 被拒：
+
+```json
+{ "type": "agent.hello.nack", "reason": "instance-conflict", "hubVersion": "2.1", "retryable": true }
+```
+
+- 拒绝的是新连接，不是踢掉旧连接。踢旧连接会让旧实例退避重连再踢回去，形成互踢循环；且新 `bootId` 会把旧实例在跑的任务判成 `agent-lost`，而机器上任务照跑完，副作用叠加。
+- `retryable: true` 表示这不是配置错误：agent 应退避重连，不得致命退出。`contract-major-mismatch`、`agent-identity-mismatch`、`invalid-card`、`skill-conflict` 仍按不可重试处理。
+- 旧连接若是僵尸（休眠、网线拔出导致的半开），由 §4.4 的心跳超时（60s）清扫；新实例退避重连即可接管，无需人工介入。
+- 连接关闭只释放自己那条连接：被接管的旧连接稍后收到 close 时，不得把已由新连接承载的成员标为离线。
+- 同机同数据目录的重复启动由 agent 本地单实例锁先行拦截；hub 侧规则负责跨机器兜底。
+
 ### 4.2 私有信封
 
 隧道内所有帧包私有信封；信封是 Novoard 内部物流，A2A 标准只管"消息长什么样"，不管"怎么运输"：
