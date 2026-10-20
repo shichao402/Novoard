@@ -12,8 +12,8 @@
 | [0004](0004-a2a-as-common-language.md) | A2A 作为全系统通用语 | Accepted | 2026-10-12 |
 | [0005](0005-route-by-definition-table-lookup.md) | 定义时判断，路由只查表 | Accepted | 2026-10-12 |
 | [0006](0006-tech-stack-baseline.md) | 技术栈基线：Node hub 与 lite-agent | Accepted | 2026-10-12 |
-| [0007](0007-cronkit-as-reference-only.md) | cronkit 退位为参考实现 | Proposed | 2026-10-12 |
-| [0008](0008-desktop-shell-decision.md) | Mac 桌面载体决策：新写轻壳 | Accepted | 2026-10-14 |
+| [0007](0007-cronkit-as-reference-only.md) | cronkit 退位为参考实现 | Accepted | 2026-10-12 |
+| [0008](0008-desktop-shell-decision.md) | Mac 桌面载体决策：新写轻壳 | Superseded（外壳选型由 agent 仓 ADR-0016 接替） | 2026-10-14 |
 | [0009](0009-hub-management-console.md) | Hub 管理控制台采用 Ant Design Pro | Accepted | 2026-10-15 |
 | [0010](0010-member-identity-as-ssot.md) | 成员身份独立成 SSOT，在线状态降为覆盖层 | Accepted | 2026-10-20 |
 

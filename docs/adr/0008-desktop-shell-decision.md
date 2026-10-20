@@ -1,6 +1,6 @@
 # ADR-0008: Mac 桌面载体决策——新写轻壳（零构建 Web 面板），非 Electron/Raycast
 
-- 状态：Accepted
+- 状态：Superseded（外壳选型与入口形态由 novoard-agent 仓 ADR-0016 接替：改为 Tauri 壳加托盘，磁贴并入壳内控制台；本 ADR 关于"否决 Electron/Raycast"与"零构建面板"的结论仍然有效）
 - 日期：2026-10-14
 - 讨论来源：M1-M4 试点期触发数据（116 条审计事件）+ PRD-1 磁贴/热键/托盘三形态需求 + ADR-0007 载体悬置。用户在 M4 收官时指示"继续"，授权按 roadmap 顺序推进 M5 首项"载体决策 ADR（三候选对比，以试点期触发数据为输入）"。
 

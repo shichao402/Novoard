@@ -1,7 +1,8 @@
 # Novoard 系统架构总览
 
-- 版本：v0.1（M0 文档阶段）
-- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0003](../adr/0003-hub-and-spoke-agent-egress.md) [0004](../adr/0004-a2a-as-common-language.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0007](../adr/0007-cronkit-as-reference-only.md) [0009](../adr/0009-hub-management-console.md)
+- 版本：v0.3.4（M9 收官，2026-10-20）
+- 相关 ADR：[0002](../adr/0002-novoard-cronkit-boundary.md) [0003](../adr/0003-hub-and-spoke-agent-egress.md) [0004](../adr/0004-a2a-as-common-language.md) [0005](../adr/0005-route-by-definition-table-lookup.md) [0006](../adr/0006-tech-stack-baseline.md) [0007](../adr/0007-cronkit-as-reference-only.md) [0008](../adr/0008-desktop-shell-decision.md) [0009](../adr/0009-hub-management-console.md) [0010](../adr/0010-member-identity-as-ssot.md)
+- 桌面载体：本仓 [ADR-0008](../adr/0008-desktop-shell-decision.md) 的外壳选型已由 novoard-agent 仓 ADR-0016 接替（Tauri 壳加托盘），现行记录在 agent 仓。
 
 ## 一句话
 
@@ -103,7 +104,7 @@ flowchart TB
 
 - hub：腾讯云 CVM Docker 容器，宿主机 nginx 将 `https://novoard.firoyang.com/` 根路径反代到仅绑定 127.0.0.1 的 Hub；React 19 + Ant Design 6 / ProComponents 3 + Vite 7 静态产物随同一镜像交付。
 - 企微 bot：CVM，与 hub 同机或独立轻服务（只转发与鉴权，零 LLM）。
-- agent：Windows 安装包常驻系统托盘，macOS DMG 常驻菜单栏；无头 Linux 使用 SEA zip，Web 控制台默认仅回环监听。三端通过契约 2.0 注册同一 Hub。
+- agent：独立 novoard-agent 仓交付，分发形态与桌面壳见该仓 PRD-6（Windows/macOS 均发 Tauri 壳，macOS 为 DMG 且常驻菜单栏，Linux 为无头 SEA）；本仓只管注册行为，三端通过契约 2.1 注册同一 Hub。
 - 手机：iOS 快捷指令打 hub HTTP 门，fire-and-forget。
 
 ## 非目标
