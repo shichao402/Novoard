@@ -112,7 +112,9 @@ export default function MembersPage() {
             "—"
           );
         }
-        const detail = [row.app.channel, row.app.platform].filter(Boolean).join(" · ");
+        const detail = [row.app.channel, row.app.platform]
+          .filter(Boolean)
+          .join(" · ");
         return (
           <span title={detail || undefined}>
             v{row.app.version}
