@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.2（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.3（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.2`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.3`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -119,7 +119,7 @@ steps:
 
 | type | 方向 | 载荷 | 说明 |
 | --- | --- | --- | --- |
-| `agent.hello` | agent → hub | agentId、card、contractVersion、可选 bootId、在途任务清单 | 注册 / 重连；身份来自 WebSocket Upgrade 的 Bearer token |
+| `agent.hello` | agent → hub | agentId、card、contractVersion、可选 bootId、在途任务清单、可选 app（version / channel / platform） | 注册 / 重连；身份来自 WebSocket Upgrade 的 Bearer token。`app` 只用于成员视图展示，hub 不据此拒绝注册，版本事实源是 relkit 服务器 |
 | `agent.ping` | 双向 | ts | 心跳 |
 | `telemetry` | agent → hub | cpu/mem/磁盘摘要 | 可选，频率配置 |
 | `card.update` | agent → hub | 新 card | target 定义变更后推送 |
@@ -137,7 +137,8 @@ steps:
     "skills": []
   },
   "bootId": "6f1c2a40-7b8e-4d3a-9c1e-2a4b6c8d0e1f",
-  "inFlightTaskIds": ["task-20261012-001"] }
+  "inFlightTaskIds": ["task-20261012-001"],
+  "app": { "version": "0.3.4", "channel": "stable", "platform": "win32-x64" } }
 ```
 
 <!-- contract-example: ops:agent.ping -->

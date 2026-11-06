@@ -231,6 +231,8 @@ export function listMemberViews({
       registered: !!live,
       skillCount: skills.length,
       skills: skills.map((skill) => ({ ...skill, name: skill.name || skill.id })),
+      // 契约 v2.3 hello.app：最近一次注册上报的程序版本。老 agent 或从未接入为 null
+      app: live?.app ?? null,
     };
     if (includeCredentials) {
       view.credentials = record

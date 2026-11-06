@@ -233,7 +233,7 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
         log.info?.(`agent ${body.agentId} 已有在线实例，拒绝这条重复连接（等待其自行退避重连或旧连接心跳超时）`);
         return;
       }
-      const result = registry.register({ agentId: body.agentId, card: body.card, conn: ws, inFlightTaskIds: body.inFlightTaskIds ?? [] });
+      const result = registry.register({ agentId: body.agentId, card: body.card, conn: ws, inFlightTaskIds: body.inFlightTaskIds ?? [], app: body.app ?? null });
       if (!result.ok) {
         sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: result.reason, hubVersion: CONTRACT_VERSION }));
         return;

@@ -51,7 +51,7 @@ export function createRegistry({ validate, log = console } = {}) {
 
   return {
     /** agent.hello 注册 / 重连：card 校验 + skill 冲突检查（先到先得）。 */
-    register({ agentId, card, conn = null, inFlightTaskIds = [] }) {
+    register({ agentId, card, conn = null, inFlightTaskIds = [], app = null }) {
       const cardCheck = validate ? validate.agentCard(card) : { ok: true, errors: [] };
       if (!cardCheck.ok) {
         return { ok: false, reason: `invalid-card: ${cardCheck.errors.join("; ")}` };
@@ -73,6 +73,7 @@ export function createRegistry({ validate, log = console } = {}) {
         lastSeen: Date.now(),
         registeredAt: existed?.registeredAt ?? new Date().toISOString(),
         inFlightTaskIds: [...inFlightTaskIds],
+        app: normalizeApp(app),
         bootId: existed?.bootId ?? null,
         offlineSince: null,
       });
@@ -180,6 +181,7 @@ export function createRegistry({ validate, log = console } = {}) {
         skillCount: [...m.skills.values()].filter(routable).length,
         lastSeen: new Date(m.lastSeen).toISOString(),
         registeredAt: m.registeredAt,
+        app: m.app ?? null,
       }));
     },
 
@@ -190,6 +192,7 @@ export function createRegistry({ validate, log = console } = {}) {
         name: m.card.name,
         online: !!m.conn,
         skills: [...m.skills.values()].filter(routable),
+        app: m.app ?? null,
       }));
     },
 
@@ -220,4 +223,16 @@ export function createRegistry({ validate, log = console } = {}) {
 
 export function newMsgId() {
   return `e-${randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * hello.app（契约 v2.3）只用于展示：只取 version / channel / platform 三个字符串，
+ * 其他字段丢弃，长度截断，防止对端把任意大对象塞进面板。没有 version 视为未上报。
+ */
+export function normalizeApp(app) {
+  if (!app || typeof app !== "object") return null;
+  const pick = (value) => (typeof value === "string" && value.trim() ? value.trim().slice(0, 64) : null);
+  const version = pick(app.version);
+  if (!version) return null;
+  return { version, channel: pick(app.channel), platform: pick(app.platform) };
 }

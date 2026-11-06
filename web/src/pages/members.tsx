@@ -102,6 +102,28 @@ export default function MembersPage() {
       render: (_, row) => (row.registered ? row.skillCount : "—"),
     },
     {
+      title: "版本",
+      key: "app",
+      render: (_, row) => {
+        if (!row.app) {
+          return row.registered ? (
+            <span title="该 agent 未上报版本（契约 2.3 之前的版本）">未知</span>
+          ) : (
+            "—"
+          );
+        }
+        const detail = [row.app.channel, row.app.platform].filter(Boolean).join(" · ");
+        return (
+          <span title={detail || undefined}>
+            v{row.app.version}
+            {row.app.channel && row.app.channel !== "stable" ? (
+              <Tag style={{ marginInlineStart: 6 }}>{row.app.channel}</Tag>
+            ) : null}
+          </span>
+        );
+      },
+    },
+    {
       title: "接入凭据",
       hideInTable: !canManageCredentials,
       render: (_, row) => {

@@ -1,5 +1,5 @@
 {
-  "version": "2.2",
+  "version": "2.3",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {
@@ -110,6 +110,69 @@
           "skills": []
         },
         "x-future-optional": { "nested": true }
+      }
+    },
+    {
+      "id": "good-hello-with-app",
+      "target": "ops:agent.hello",
+      "expect": "pass",
+      "desc": "v2.3：hello 携带程序版本信息 app",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.3",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        },
+        "app": { "version": "0.3.4", "channel": "stable", "platform": "win32-x64" }
+      }
+    },
+    {
+      "id": "good-hello-app-unknown-subfield",
+      "target": "ops:agent.hello",
+      "expect": "pass",
+      "desc": "app 对象同样开放：后续次版本在 app 里加字段，旧 hub 不得拒收",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.3",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        },
+        "app": { "version": "0.3.4", "releaseCode": 12 }
+      }
+    },
+    {
+      "id": "bad-hello-app-missing-version",
+      "target": "ops:agent.hello",
+      "expect": "reject",
+      "desc": "app 出现时必须带 version",
+      "frame": {
+        "type": "agent.hello",
+        "contractVersion": "2.3",
+        "agentId": "agent-a",
+        "card": {
+          "name": "agent-a",
+          "description": "agent-a",
+          "version": "2.0.0",
+          "capabilities": { "streaming": false, "pushNotifications": true },
+          "defaultInputModes": ["text"],
+          "defaultOutputModes": ["text"],
+          "skills": []
+        },
+        "app": { "channel": "stable" }
       }
     },
     {

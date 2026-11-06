@@ -118,7 +118,15 @@ export interface MemberView {
   registered: boolean;
   skillCount: number;
   skills: TargetSkill[];
+  /** 契约 v2.3 hello.app。老 agent 或从未接入为 null */
+  app?: MemberApp | null;
   credentials?: MemberCredentials;
+}
+
+export interface MemberApp {
+  version: string;
+  channel: string | null;
+  platform: string | null;
 }
 
 export interface TraceEvent {

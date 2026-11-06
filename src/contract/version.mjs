@@ -9,4 +9,4 @@
  * scripts/check-contract-copy.mjs 会校验这一点。
  * 字面格式统一为不带 `v` 前缀（契约 §0 的 contractVersion pattern 为 ^\d+\.\d+$）。
  */
-export const CONTRACT_VERSION = "2.2";
+export const CONTRACT_VERSION = "2.3";
