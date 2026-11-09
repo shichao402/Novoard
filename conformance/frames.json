@@ -1,5 +1,5 @@
 {
-  "version": "2.3",
+  "version": "2.4",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {
@@ -409,6 +409,69 @@
       "expect": "reject",
       "desc": "缺必填字段",
       "frame": { "targets": { "t-1": { "title": "x" } } }
+    },
+    {
+      "id": "good-target-uses",
+      "target": "targets",
+      "expect": "pass",
+      "desc": "v2.4：最小 uses step",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"uses":"versionControl/svn-update"}]}}}
+    },
+    {
+      "id": "good-target-uses-full",
+      "target": "targets",
+      "expect": "pass",
+      "desc": "v2.4：uses 带 with、cwd、retry、retryInterval",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"uses":"osg/cmake-build","cwd":"D:/w/OSG","with":{"target":"GameCore_Editor","clean":false,"jobs":8,"extraFiles":["a.txt"]},"retry":2,"retryInterval":"30s"}]}}}
+    },
+    {
+      "id": "good-target-once-per-day-deadline",
+      "target": "targets",
+      "expect": "pass",
+      "desc": "v2.4：schedule 搭配 oncePerDay 与 deadline",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","schedule":"*/15 0-6 * * *","oncePerDay":false,"deadline":"07:00","steps":[{"script":"echo"}]}}}
+    },
+    {
+      "id": "bad-target-uses-no-slash",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.4：uses 缺 <包>/<工具> 分隔",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"uses":"svn-update"}]}}}
+    },
+    {
+      "id": "bad-target-uses-unknown-field",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.4：uses step 带未知字段（target 为封闭 schema）",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"uses":"versionControl/svn-update","args":{}}]}}}
+    },
+    {
+      "id": "bad-target-deadline-24",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.4：deadline 不接受 24:00",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","schedule":"0 2 * * *","deadline":"24:00","steps":[{"script":"echo"}]}}}
+    },
+    {
+      "id": "good-hello-ack-pack-sources",
+      "target": "ops:agent.hello.ack",
+      "expect": "pass",
+      "desc": "v2.4：ack 下发能力包来源清单",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.4","packSources":[{"id":"versionControl","git":"https://example.com/packs.git","branch":"main","subdir":"packs/versionControl"},{"id":"osg","git":"git@example.com:t/osg.git","branch":"main"}]}
+    },
+    {
+      "id": "good-hello-ack-no-pack-sources",
+      "target": "ops:agent.hello.ack",
+      "expect": "pass",
+      "desc": "v2.4：不带 packSources 仍合法（hub 未下发）",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.4"}
+    },
+    {
+      "id": "bad-hello-ack-pack-source-no-branch",
+      "target": "ops:agent.hello.ack",
+      "expect": "reject",
+      "desc": "v2.4：packSources 项缺 branch",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.4","packSources":[{"id":"osg","git":"git@example.com:t/osg.git"}]}
     }
   ]
 }

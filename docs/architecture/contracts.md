@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.3（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.4（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.3`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.4`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -30,6 +30,8 @@ targets:
   deploy-investm:
     title: 部署 InvestM 到本地
     schedule: "0 9 * * 1"     # 可选，cron 表达式；调度归 agent 本地（ADR-0003）
+    oncePerDay: true          # 可选，默认 true：schedule 触发时同一天成功后不再触发
+    deadline: "07:00"         # 可选，schedule 触发的硬截止（agent 时区 HH:mm）
     steps: [...]              # step 语法见 §1.2；与 template 二选一
     template: deploy-webapp   # 可选，引用 stepTemplates 参数化展开
     vars:
@@ -46,6 +48,8 @@ targets:
 | 字段 | 取值 | 运行时行为 |
 | --- | --- | --- |
 | `schedule` | cron 表达式 | agent 本地调度，hub 不参与定时；周报类 target 的归属依据 |
+| `oncePerDay` | `bool`，默认 `true` | 只作用于 schedule 触发：`true` 时同一本地日期成功过就不再触发（去重键 `<targetId>\|<本地日期>`）；`false` 时按每个触发时刻去重，适合「每 15 分钟检查一次」类 target。手动、Hub、对等触发不去重（v2.4） |
+| `deadline` | `HH:mm`（agent 时区） | 只作用于 schedule 触发：触发时刻晚于它则截止取次日；到点停止剩余步骤，本次记 failed（`deadline-exceeded`）（v2.4） |
 | `expose` | `a2a` / `local` | `a2a` 进 Agent Card skills，远程可委派，走 task 生命周期；`local` 只进本地注册表与磁贴，远程请求查无此项 |
 | `audit` | `none` / `summary` / `full` | 持久化待遇：不记 / 记起止与终态 / 记全步骤事件流 |
 | `requiresApproval` | `bool` | `true` 则 task 转 input-required，审批门沿链双向透传，IM/Web/磁贴任一入口可恢复 |
@@ -59,7 +63,7 @@ targets:
 
 ### 1.2 steps 语法（契约内部化）
 
-step 为有序数组，顺序执行，任一步失败即 target 失败（终态 failed，携带失败步骤号与 stderr 摘要）。四种 step 类型：
+step 为有序数组，顺序执行，任一步失败即 target 失败（终态 failed，携带失败步骤号与 stderr 摘要）。五种 step 类型：
 
 ```yaml
 steps:
@@ -70,8 +74,33 @@ steps:
       NODE_ENV: development
   - openApp: "http://localhost:{{port}}"  # ② 打开实例：http(s) URL 走默认浏览器；其余按应用路径/命令拉起
   - openPath: "{{repoDir}}/dist"          # ③ 打开路径：系统文件管理器揭示
-  - template: smoke-check                 # ④ 引用 stepTemplate（§1.3），展开后等价 ①-③
+  - template: smoke-check                 # ④ 引用 stepTemplate（§1.3），展开后等价 ①-③ 与 ⑤
+  - uses: versionControl/svn-update       # ⑤ 调用能力包工具（v2.4）：<能力包 id>/<工具 id>
+    cwd: "{{repoDir}}"                    # 工程根：传给工具 --project-root，也是路径锁的键
+    with:                                 # 工具参数，按该工具 manifest 校验
+      strategy: follow-latest
+    retry: 1                              # 可选，失败重试次数（0–10）
+    retryInterval: 2m                     # 可选，重试间隔
 ```
+
+⑤ `uses` 的 JSON 形态（targets 转 JSON 后同样受 schema 校验）：
+
+<!-- contract-example: targets -->
+```json
+{ "targets": { "osg-trunk-nightly": {
+  "title": "OSG Trunk 夜间例行", "schedule": "10 2 * * *", "oncePerDay": true, "deadline": "07:00",
+  "steps": [
+    { "uses": "osg/revert-generated", "cwd": "D:/workspace/OSG_Trunk1" },
+    { "uses": "versionControl/svn-update", "cwd": "D:/workspace/OSG_Trunk1",
+      "with": { "strategy": "follow-latest", "onConflict": "postpone" }, "retry": 1, "retryInterval": "2m" },
+    { "uses": "general/unity-warmup", "cwd": "D:/workspace/OSG_Trunk1/Project" }
+  ],
+  "expose": "local", "audit": "summary", "requiresApproval": false, "notify": "on-failure" } } }
+```
+
+- `uses` 的包 id 匹配 `^[A-Za-z][A-Za-z0-9-]*$`，工具 id 匹配 `^[a-z][a-z0-9-]*$`；能力包的 manifest、调用约定、退出码与进度协议由 agent 实现定义（novoard-agent ADR-0019），不属于本契约
+- `with`、`cwd` 支持 `{{var}}` 插值，规则同下
+- 依赖的能力包本机不可用时，agent 在装载期报出具体位置与原因，不等到运行时（见 §2 Card 排除规则）
 
 - 插值语法 `{{var}}`：取值优先级为触发时传入 vars > target `vars` > stepTemplate 默认值
 - `{{var}}` 无任何来源即校验失败：agent 启动自检报错（schemas/target.json），运行期不静默替换为空串
@@ -107,6 +136,7 @@ steps:
 }
 ```
 
+- 能力包可用性（v2.4）：target 依赖的能力包在本机不可用（诊断有 error）时，该 target 不得出现在 Agent Card skills 中；可用性变化时 agent 发 `card.update`
 - 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description 写能力、安排和参数，不只是命令标题；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）。`timeout`、`lostTtl`、`approvalTtl` 分别以 `x-novoard-timeout`、`x-novoard-lost`、`x-novoard-approval` 透传。这些时长在 Agent 的 Target 编辑页调整，Hub 不写死
 - 成员介绍：card 可带 `x-novoard-role`（稳定角色，如 `office-pc`）。`description` 是给其他成员看的自我介绍。对话技能 id 为 `converse`，`x-novoard-kind` 固定为 `agent`。这种技能不进全局 skill 路由表，多台成员可以同时声明；Target id 不能占用 `converse`
 - 聚合 card = 当前调用主体 target 范围内、可点名执行的 skills 并集，附同样经过过滤的 `x-novoard-members`（member id → 寻址信息）；端点要求会话或 PAT 的 `targets.read` 权限。`x-novoard-kind: agent` 的技能不进入聚合 card，也不参与 skill id 冲突。其余 skill id 冲突时注册拒绝并回执，先到先得
@@ -182,6 +212,17 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 - 旧连接若是僵尸（休眠、网线拔出导致的半开），由 §4.4 的心跳超时（60s）清扫；新实例退避重连即可接管，无需人工介入。
 - 连接关闭只释放自己那条连接：被接管的旧连接稍后收到 close 时，不得把已由新连接承载的成员标为离线。
 - 同机同数据目录的重复启动由 agent 本地单实例锁先行拦截；hub 侧规则负责跨机器兜底。
+
+注册成功回 `agent.hello.ack`：`inFlightTaskIds` 是 hub 侧仍在途、要求 agent 对账的任务（§4.4）；`hubVersion` 是 hub 侧契约版本；`packSources`（v2.4，可选）是能力包来源清单，每项 `id` / `git` / `branch` / 可选 `subdir`，agent 缓存后供包管理器拉取。缺省表示 hub 未下发，agent 沿用本地缓存；旧 agent 忽略该字段。
+
+<!-- contract-example: ops:agent.hello.ack -->
+```json
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.4",
+  "packSources": [
+    { "id": "versionControl", "git": "https://github.com/example/novoard-packs.git", "branch": "main", "subdir": "packs/versionControl" },
+    { "id": "osg", "git": "git@example.com:team/OSGToolset.git", "branch": "main" }
+  ] }
+```
 
 ### 4.2 私有信封
 
