@@ -170,10 +170,31 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 
 验收：Hub 后端 138 / 前端组件 10 / Playwright / Docker 构建全绿（v0.3.5 发布门禁）；Agent 120 项全绿（v0.3.3）。线上握手实测两侧 `contractVersion=2.2` 对齐，`agent.json` 中残留的 2.1 值按设计被忽略并留日志。环境侧沉淀：本机 Homebrew node 为源码构建版缺 SEA fuse 串，agent 打包须显式指定官方发行版 node 作基底。
 
+## 跨仓：cronkit 吸收（ADR-0012）
+
+本表是这项工作唯一的进度源。各仓实现单开工前先看这里确认依赖，做完一项回来改状态。
+
+| 波次 | 仓库 | 任务 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H1 契约 v2.4 | 无 | 未开始 |
+| 1 | novoard-packs | README P1–P3 仓骨架、versionControl、general | 无 | 未开始 |
+| 1 | OSGToolset | README O1 文案 | 无 | 未开始 |
+| 2 | novoard-agent | PRD-7 A1 同步契约 | H1 | 未开始 |
+| 2 | novoard-agent | PRD-7 A2 调度器、A3 路径锁、A4 uses step | A1；A4 另需 P1 | 未开始 |
+| 3 | Novoard | PRD-6 H2–H4 来源清单 | H1 | 未开始 |
+| 3 | novoard-agent | PRD-7 A5 包管理 | A4、H4 | 未开始 |
+| 4 | novoard-agent | PRD-7 A6 缺包诊断、A7 控制台 | A2、A5 | 未开始 |
+| 4 | novoard-packs | README P4–P5 统一 CLI、进度 | P1–P3 | 未开始 |
+| 4 | OSGToolset | README O2–O3 取消收尾、进度 | A4 | 未开始 |
+| 5 | cronkit | retire-plan C1 冻结、C2 导出脚本 | H1 | 未开始 |
+| 6 | cronkit | retire-plan C3 逐个迁移（Windows），C4 退役 | 以上全部 | 未开始 |
+
+第 6 波只能在 Windows 工作机上做。
+
 ## 里程碑之外（暂不排期）
 
 - 更多 A2A 客户端接入验证（M4 遗留）：当前已接入 With，端点能力齐备，新增客户端属验证性接入
-- cronkit Windows 机器收编为成员（属「收编」而非「试点」，规模另立，见 [research 0004](../research/0004-autoworks-integration.md)）
+- ~~cronkit Windows 机器收编为成员~~：改为吸收进 novoard-agent，见上「跨仓：cronkit 吸收」
 - 新 agent 接入（家里服务器等）：架构天然支持，接入是运维动作不是开发项
 - Tailscale 直连替代 relay 隧道：等 relay 痛点真实出现
 - 事件触发器扩展（位置、NFC、app 状态类自动化）：YAGNI 区

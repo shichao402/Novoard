@@ -17,6 +17,7 @@
 | [0009](0009-hub-management-console.md) | Hub 管理控制台采用 Ant Design Pro | Accepted | 2026-10-15 |
 | [0010](0010-member-identity-as-ssot.md) | 成员身份独立成 SSOT，在线状态降为覆盖层 | Accepted | 2026-10-20 |
 | [0011](0011-target-description-and-examples.md) | target 定位先靠描述与示例，分面检索等真实规模再做 | Accepted | 2026-11-09 |
+| [0012](0012-absorb-cronkit-into-agent.md) | cronkit 被 novoard-agent 吸收：调度归内核，领域工具外置为能力包 | Accepted | 2026-11-09 |
 
 ## 约定
 

@@ -13,6 +13,7 @@ Novoard 的产品需求按能力域拆分，每份 PRD 独立可读，共享统�
 | [PRD-3 通知与自动化规则](prd-3-notifications-and-automation-rules.md) | 事件扇出与事件触发器 | 执行结果主动找人；外部事件驱动操作 | PRD-2（hub 事件流水） |
 | [PRD-4 A2A 能力面](prd-4-a2a-capability-surface.md) | AI 客户端接入、Agent Card、审批门 | 让 AI 助手安全地替你干活 | PRD-2；契约 SSOT |
 | [PRD-5 试点接入](prd-5-pilot-integrations.md) | 三接入（企微 bot / dev builder / 内网周报 agent）+ 六个补充小东西 | 用真实点位验证 PRD-2/3/4 验收面与契约实现无关性 | 契约 v1.0；ADR-0007 |
+| [PRD-6 本地调度与能力包](prd-6-local-schedule-and-capability-packs.md) | 契约 v2.4、能力包来源清单 | agent 能定时干活，缺包能提前知道 | ADR-0012 |
 
 ## 共享术语
 

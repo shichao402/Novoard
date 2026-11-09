@@ -1,0 +1,115 @@
+# PRD-6 本地调度与能力包（hub 侧实现单）
+
+依据 [ADR-0012](../adr/0012-absorb-cronkit-into-agent.md)。agent 侧实现见 novoard-agent PRD-7。本文件只管 hub 仓要做的事。
+
+开工前先看 [roadmap](../roadmap/roadmap.md)「跨仓：cronkit 吸收」表，确认依赖项已完成；做完一项回那张表改状态。
+
+## 产出总览
+
+| 编号 | 内容 | 依赖 |
+| --- | --- | --- |
+| H1 | 契约 v2.4：文档、schema、示例、版本号 | 无 |
+| H2 | 来源清单存储 `src/pack-sources.mjs` | 无 |
+| H3 | 管理台：来源清单增删改 | H2 |
+| H4 | hello.ack 下发 `packSources` | H1、H2 |
+
+H1 完成后通知 agent 仓开始 A1。两仓同批发布（[contracts.md](../architecture/contracts.md) §0）。
+
+## H1 契约 v2.4
+
+### 改动文件
+
+- `docs/architecture/contracts.md`：
+  - 版本行改为 v2.4；
+  - §1 YAML 示例加 `oncePerDay`、`deadline`；
+  - §1.1 表加两行；
+  - §1.2 加第 ⑤ 种 step；
+  - §2 加一句 Card 排除规则；
+  - §4 hello.ack 字段说明加 `packSources`。
+- `docs/architecture/schemas/target.json`：加字段与 `stepUses`，见下。
+- `docs/architecture/schemas/frame-agent-hello-ack.json`：加 `packSources`。
+- `src/contract/version.mjs`：改为 `2.4`。
+- `conformance/`：补 uses step 正反例。
+
+### target.json 增量
+
+`$defs.target.properties` 新增：
+
+```json
+"oncePerDay": { "type": "boolean", "default": true, "description": "schedule 触发时同一天成功后不再触发；false 时按每个触发时刻去重" },
+"deadline": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$", "description": "schedule 触发的硬截止（agent 时区 HH:mm）。触发时刻晚于它则取次日；到点停止剩余步骤" }
+```
+
+`$defs.step.oneOf` 追加 `{ "$ref": "#/$defs/stepUses" }`，并新增：
+
+```json
+"stepUses": {
+  "type": "object",
+  "required": ["uses"],
+  "properties": {
+    "uses": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*/[a-z][a-z0-9-]*$", "description": "<能力包 id>/<工具 id>" },
+    "with": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean", "array"], "items": { "type": "string" } }
+    },
+    "cwd": { "type": "string", "description": "工程根，传给工具 --project-root，也是路径锁的键" },
+    "retry": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "retryInterval": { "type": "string", "pattern": "^\\d+(s|m|h|d)$" }
+  },
+  "additionalProperties": false
+}
+```
+
+`with`、`cwd` 支持 `{{var}}` 插值，规则同 §1.2。
+
+### hello.ack 增量
+
+```json
+"packSources": {
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["id", "git", "branch"],
+    "properties": {
+      "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]*$" },
+      "git": { "type": "string", "minLength": 1 },
+      "branch": { "type": "string", "minLength": 1 },
+      "subdir": { "type": "string", "description": "包根在仓库内的相对路径，缺省为仓库根" }
+    },
+    "additionalProperties": false
+  }
+}
+```
+
+### §2 新增规则
+
+target 依赖的能力包在本机不可用（诊断有 error）时，该 target 不得出现在 Agent Card skills 中。可用性变化时 agent 发 `card.update`。
+
+### 验收
+
+- `npm test` 通过，门禁跑过新示例。
+- v2.3 agent 连 v2.4 hub 能正常注册（忽略 packSources）。
+
+## H2 来源清单存储
+
+- 新文件 `src/pack-sources.mjs`，落盘 `<stateDir>/pack-sources.json`。原子写与 0600 权限照搬 `src/members.mjs` 的写法。
+- 接口：`list()`、`upsert({ id, git, branch, subdir })`、`remove(id)`。按 schema 校验，非法即拒。
+- 全局一份，不按成员区分。以后需要按成员覆盖时再加。
+- 验收：单测覆盖增删改、非法 id 拒绝、重启后数据保留。
+
+## H3 管理台
+
+- 管理台新增「能力包来源」页：表格列出 id、git、branch、subdir，提供新增、编辑、删除。
+- 新增时需输入一次 id（正则校验，实时提示）；之后编辑、删除一律在列表中选择，不再手输 id。
+- 提示文案："修改后，在线成员重连时生效。"
+- 验收：新增 osg 来源后，`pack-sources.json` 有对应条目；删除后消失。
+
+## H4 下发
+
+- `src/tunnel.mjs` 组装 `agent.hello.ack` 时（约 246 行）附上 `packSources: packSources.list()`。
+- 验收：agent 重连后，在其 `<dataDir>/pack-sources.json` 缓存中看到同样内容（agent A5 完成后联调）。
+
+## 不做
+
+- 来源修改后主动推送给在线成员（新帧），等真有需要再加。
+- 能力包二进制分发、签名。能力包一律 git 拉取。
