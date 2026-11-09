@@ -57,7 +57,7 @@ targets:
 ### 4. skill id 命名约定（不改代码）
 
 - 格式 `<对象>-<动作>`，例如 `novoard-agent-dev-install`、`weather-query`。
-- 同一个动作要放在多台机器上时，加成员后缀：`xxx-dev-install-imac`、`xxx-dev-install-win`。
+- 只有一台机器提供时不加机器后缀。同一个 target 要接入第二台机器时，在「机器名后缀」和「多台机器共用同一个 id」之间选，见下面的推迟表。
 - 只针对机器本身的动作，对象写机器：`imac-lock`、`imac-disk-query`。
 
 ### 5. 客户端规则（voice、IM AI 等，不进契约）
@@ -79,7 +79,9 @@ targets:
 | 触发时传参（`inputs`） | 写第一个离不开参数的 target 时，例如查任意城市的天气 | 定位条件与参数分开：「北京」是参数不是定位条件；缺必填参数时追问，参照 Alexa / App Intents |
 | `readOnly` 声明 | 查询类 target 多到逐个口头确认让人烦 | 参照 MCP `readOnlyHint` / `destructiveHint`，默认按有副作用处理；只影响口头确认，不替代 `requiresApproval` |
 | 成员别名字段、默认成员 | voice 做出来，并且确实说不清是哪台机器 | 参照 Home Assistant `context_area`：没说机器时默认用发话设备所在成员；`member` 永远表示执行者，不表示目的地 |
-| `placement: any`、成员 + skill 联合寻址 | 有具体需求 | 联合寻址会改 `/api/trigger`、task 持久化和 PAT allow/deny 的键，属于大版本变更 |
+| `placement: any` | 出现在哪台机器执行结果都一样的 target（如查天气），且确实要在多台上各定义一份 | 含义是「任选一台在线成员执行」，解决可互换执行，不能替代下一行的「指定机器」 |
+| 多台机器共用同一个 id（成员 + skill 联合寻址） | 同一个 target 要接入第二台机器 | 不必升大版本：`skillIndex` 改为一个 id 对应多台成员；触发请求加可选 `member`（A2A 用 `skillId@member`，agent 本机入口已能解析）；id 只在一台时行为不变，在多台且没指定 member 时返回 409 并列出候选，`offline: queue` 同样返回 409，不随便挑一台排队；Hub 一个 id 一张卡片，配机器选择器；授权 `targetAllowed(principal, member, skillId)` 和 task 的执行成员记录已经按成员区分。改动面主要是 registry 和 5 处 `ownerOf` 调用。备选做法是机器名后缀（契约零改动，代价是 N 张卡片、PAT 要逐条配）；否决 Hub 把对外 id 改成 `member/skillId`，这会让已有 PAT、快捷指令和通知里的 id 全部变化 |
+| 项目仓库作为共享定义的唯一来源（`.novoard/targets.yaml`） | 上一行做完后，多台机器维护同一份定义确实出现不一致；最好再攒到一两种编译安装以外的 target 用例 | 共享部分（id、标题、描述、steps、默认超时）放在项目仓库，`cwd` 默认是仓库根目录；每台机器只登记项目路径，可选覆盖限白名单（timeout、env、vars、notify，审批只能改得更严）；同一个 id 同时出现在本机 `targets.yaml` 和项目文件里时报冲突；card 带 `x-novoard-source`（repo、commit、只对共享部分计算的 `defHash`），Hub 只标 drift，不拒绝注册，不下发定义。需要补「仓库文件变化后重新加载」；只扫描明确登记的目录。否决 Hub 当中心定义库往下推送（控制方向反转，离线机器同步不到）和「先注册的为准」（是否先上线是偶然的） |
 
 ## Consequences
 
