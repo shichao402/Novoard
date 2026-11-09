@@ -16,6 +16,7 @@
 | [0008](0008-desktop-shell-decision.md) | Mac 桌面载体决策：新写轻壳 | Superseded（外壳选型由 agent 仓 ADR-0016 接替） | 2026-10-14 |
 | [0009](0009-hub-management-console.md) | Hub 管理控制台采用 Ant Design Pro | Accepted | 2026-10-15 |
 | [0010](0010-member-identity-as-ssot.md) | 成员身份独立成 SSOT，在线状态降为覆盖层 | Accepted | 2026-10-20 |
+| [0011](0011-target-description-and-examples.md) | target 定位先靠描述与示例，分面检索等真实规模再做 | Accepted | 2026-11-09 |
 
 ## 约定
 
