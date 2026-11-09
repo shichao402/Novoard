@@ -176,10 +176,10 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 
 | 波次 | 仓库 | 任务 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H1 契约 v2.4 | 无 | 未开始 |
-| 1 | novoard-packs | README P1–P3 仓骨架、versionControl、general | 无 | 未开始 |
-| 1 | OSGToolset | README O1 文案 | 无 | 未开始 |
-| 2 | novoard-agent | PRD-7 A1 同步契约 | H1 | 未开始 |
+| 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H1 契约 v2.4 | 无 | 完成 |
+| 1 | novoard-agent | PRD-7 A1 同步契约（与 H1 同批推送，CI 比对 Novoard main） | H1 | 完成 |
+| 1 | novoard-packs | README P1–P3 仓骨架、versionControl、general | 无 | P1、P3 完成；P2 代码完成，Windows 验收待做 |
+| 1 | OSGToolset | README O1 文案 | 无 | 完成 |
 | 2 | novoard-agent | PRD-7 A2 调度器、A3 路径锁、A4 uses step | A1；A4 另需 P1 | 未开始 |
 | 3 | Novoard | PRD-6 H2–H4 来源清单 | H1 | 未开始 |
 | 3 | novoard-agent | PRD-7 A5 包管理 | A4、H4 | 未开始 |
