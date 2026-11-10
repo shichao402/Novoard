@@ -186,10 +186,8 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 4 | novoard-agent | PRD-7 A6 缺包诊断、A7 控制台 | A2、A5 | 完成，偏差见 PRD-7 |
 | 4 | novoard-packs | README P4–P5 统一 CLI、进度 | P1–P3 | 完成，偏差见 PRD-7 |
 | 4 | OSGToolset | README O2–O3 取消收尾、进度 | A4 | 完成；Windows 上优雅收尾不生效（靠强杀兜底），偏差见 PRD-7 |
-| 5 | cronkit | retire-plan C1 冻结、C2 导出脚本 | H1 | 完成；真实 config 人工核对随 C3，偏差见 retire-plan |
-| 6 | cronkit | retire-plan C3 逐个迁移（Windows），C4 退役 | 以上全部 | 未开始 |
-
-第 6 波只能在 Windows 工作机上做。
+| 5 | cronkit | retire-plan C1 冻结、C2 导出脚本 | H1 | 完成 |
+| 6 | cronkit | retire-plan C3 逐个迁移（Windows），C4 退役 | 以上全部 | C3 取消（不迁移，退役后在 agent 中重新配置）；C4 仓库已归档，Windows 上卸载托盘待手动完成 |
 
 ## 里程碑之外（暂不排期）
 
