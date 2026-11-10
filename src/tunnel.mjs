@@ -20,7 +20,18 @@ const KNOWN_OPS_TYPES = new Set(["agent.hello", "agent.hello.ack", "agent.hello.
 const AGENT_REPORTED_STATES = new Set(["working", "input-required", "completed", "failed", "canceled"]);
 const LOCAL_MIRROR_STATES = new Set(["completed", "failed", "canceled", "rejected"]);
 
-export function attachTunnel({ server, registry, queue, audit, artifacts, members, validate, notify, log = console }) {
+export function attachTunnel({ server, registry, queue, audit, artifacts, members, packSources = null, validate, notify, log = console }) {
+  /** PRD-6 H4：hello.ack 附上能力包来源清单；读不出来时不下发，agent 用本地缓存（不因清单损坏挡住接入）。 */
+  function packSourcesField() {
+    if (!packSources) return {};
+    try {
+      return { packSources: packSources.list() };
+    } catch (error) {
+      log.error?.(`[pack-sources] 读取失败，本次 hello.ack 不下发来源：${error.message}`);
+      return {};
+    }
+  }
+
   const wss = new WebSocketServer({ noServer: true });
   const authenticatedAgentId = new WeakMap();
   /** 成员上线钩子（M2）：main 装配层赋值 tunnel.onMemberOnline = fn 注入；hello 注册成功后调用。 */
@@ -246,6 +257,7 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
         type: "agent.hello.ack",
         inFlightTaskIds: body.inFlightTaskIds ?? [],
         hubVersion: CONTRACT_VERSION,
+        ...packSourcesField(),
       }));
       reconcileCanceledTasks(ws, body.agentId, body.inFlightTaskIds ?? []);
       reconcileBoot(ws, body.agentId, body.bootId ?? "", body.inFlightTaskIds ?? [], previousBootId);

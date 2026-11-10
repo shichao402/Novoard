@@ -13,6 +13,7 @@ export const queryKeys = {
   events: ["events"] as const,
   status: ["status"] as const,
   wecom: ["wecom"] as const,
+  packSources: ["pack-sources"] as const,
 };
 
 export function useSetupStatus() {

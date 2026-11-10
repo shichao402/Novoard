@@ -13,6 +13,7 @@ import { createTaskQueue } from "./queue.mjs";
 import { createRegistry } from "./registry.mjs";
 import { createSecrets } from "./secrets.mjs";
 import { createMemberDirectory } from "./members.mjs";
+import { createPackSources } from "./pack-sources.mjs";
 import { createIdentityStore } from "./identity.mjs";
 import { createAuth } from "./auth.mjs";
 import { createArtifacts } from "./artifacts.mjs";
@@ -49,6 +50,7 @@ export async function createHub({
   const queue = createTaskQueue({ dir: queueDir });
   const registry = createRegistry({ validate, log });
   const members = createMemberDirectory({ dir: stateDir });
+  const packSources = createPackSources({ dir: stateDir });
   const migratedMembers = migrateLegacyAgentTokens({ secrets, members, log });
   const artifacts = createArtifacts({ dir: artifactsDir });
   const wecomBot = createWecomBot({
@@ -247,6 +249,7 @@ export async function createHub({
     auth,
     artifacts,
     members,
+    packSources,
     validate,
     delegate,
     resumeTask,
@@ -258,7 +261,7 @@ export async function createHub({
   });
 
   const httpServer = await serverPromise;
-  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, artifacts, members, validate, notify: notifyAndRules, log });
+  const tunnel = attachTunnel({ server: httpServer, registry, queue, audit, artifacts, members, packSources, validate, notify: notifyAndRules, log });
   tunnelDelegate = tunnel.delegate;
 
   // 成员上线钩子：tunnel hello 注册成功后补下发该成员的 queued-offline 任务
@@ -306,6 +309,7 @@ export async function createHub({
     auth,
     artifacts,
     members,
+    packSources,
     migratedMembers,
     validate,
     notify: notifyAndRules,

@@ -11,6 +11,7 @@ const LoginPage = lazy(() => import("./pages/login"));
 const MembersPage = lazy(() => import("./pages/members"));
 const NotFoundPage = lazy(() => import("./pages/not-found"));
 const OverviewPage = lazy(() => import("./pages/overview"));
+const PackSourcesPage = lazy(() => import("./pages/pack-sources"));
 const PatsPage = lazy(() => import("./pages/pats"));
 const RolesPage = lazy(() => import("./pages/roles"));
 const SetupPage = lazy(() => import("./pages/setup"));
@@ -38,6 +39,7 @@ function AppRoutes() {
           <Route path="actions" element={<ActionsPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="members" element={<MembersPage />} />
+          <Route path="pack-sources" element={<PackSourcesPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="roles" element={<RolesPage />} />

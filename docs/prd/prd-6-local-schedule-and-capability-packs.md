@@ -109,6 +109,15 @@ target 依赖的能力包在本机不可用（诊断有 error）时，该 target
 - `src/tunnel.mjs` 组装 `agent.hello.ack` 时（约 246 行）附上 `packSources: packSources.list()`。
 - 验收：agent 重连后，在其 `<dataDir>/pack-sources.json` 缓存中看到同样内容（agent A5 完成后联调）。
 
+## H2–H4 实现偏差（2026-11-09）
+
+以实现为准：
+
+- HTTP 接口：`GET /api/pack-sources`、`PUT /api/pack-sources/:id`（新建返回 201，更新返回 200）、`DELETE /api/pack-sources/:id`。权限沿用 `users.manage`，只认管理台会话，写操作要 CSRF，并记审计（pack-source-added、pack-source-updated、pack-source-removed）。
+- 校验之外再加：branch 不能含空白、不能以 `-` 开头；subdir 统一成 `/` 分隔，拒绝绝对路径和 `..`，值为 `.` 或空视为未设置。文件损坏时拒绝读写，不按空清单处理。
+- 读来源失败时 hello.ack 不带 `packSources`，agent 保留旧缓存，不会被清空。
+- H4 联调：hub 侧单测验证 ack 带 `packSources` 且通过契约校验；agent 侧单测用 mock hub 验证缓存落盘。两侧真实进程对接留到 A7 控制台验收时一起做。
+
 ## 不做
 
 - 来源修改后主动推送给在线成员（新帧），等真有需要再加。

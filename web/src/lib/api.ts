@@ -175,3 +175,11 @@ export interface WecomConfig {
   servicePatId: string | null;
   serviceAccount: User | null;
 }
+
+/** 能力包来源（PRD-6 H2），与契约 hello.ack packSources.items 同形。 */
+export interface PackSource {
+  id: string;
+  git: string;
+  branch: string;
+  subdir?: string;
+}

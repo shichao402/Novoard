@@ -1,5 +1,6 @@
 import {
   ApiOutlined,
+  AppstoreOutlined,
   AuditOutlined,
   DashboardOutlined,
   LockOutlined,
@@ -49,6 +50,12 @@ const menu = [
     name: "成员",
     icon: <ApiOutlined />,
     permission: "targets.read",
+  },
+  {
+    path: "/pack-sources",
+    name: "能力包来源",
+    icon: <AppstoreOutlined />,
+    permission: "users.manage",
   },
   {
     path: "/audit",

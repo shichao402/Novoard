@@ -43,6 +43,7 @@ export function startServer({
   identity,
   auth,
   artifacts,
+  packSources = null, // 能力包来源清单（pack-sources.mjs，PRD-6 H2）
   members, // 成员目录（members.mjs）：成员身份与接入凭据的持久化 SSOT
   validate,
   delegate, // async ({ task, vars, cancel }) => { ok, reason } —— 隧道下发钩子（tunnel.mjs 提供）
@@ -723,6 +724,40 @@ export function startServer({
             rotated: issued.rotated,
             tokenLastFour: issued.member.tokenLastFour,
           });
+        } catch (error) {
+          sendIdentityError(res, error);
+        }
+        return;
+      }
+
+      if (pathname === "/api/pack-sources" && req.method === "GET") {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false });
+        if (!authn) return;
+        sendJson(res, 200, { sources: packSources ? packSources.list() : [] });
+        return;
+      }
+
+      const packSourceRoute = pathname.match(/^\/api\/pack-sources\/([^/]+)$/);
+      if (packSourceRoute && (req.method === "PUT" || req.method === "DELETE")) {
+        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        if (!authn) return;
+        if (!packSources) {
+          sendJson(res, 503, { error: "pack-sources-unavailable" });
+          return;
+        }
+        try {
+          const id = decodeURIComponent(packSourceRoute[1]);
+          if (req.method === "DELETE") {
+            const removed = packSources.remove(id);
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "pack-source-removed", id, removed } }, authn.principal.actor, "ops");
+            sendJson(res, 200, { ok: true, id, removed });
+            return;
+          }
+          const payload = await readJson(req);
+          const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+          const { source, created } = packSources.upsert({ ...input, id });
+          auditLine({ target: "hub", outcome: "completed", detail: { reason: created ? "pack-source-added" : "pack-source-updated", id } }, authn.principal.actor, "ops");
+          sendJson(res, created ? 201 : 200, { source, created });
         } catch (error) {
           sendIdentityError(res, error);
         }
