@@ -181,8 +181,8 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 1 | novoard-packs | README P1–P3 仓骨架、versionControl、general | 无 | P1、P3 完成；P2 代码完成，Windows 验收待做 |
 | 1 | OSGToolset | README O1 文案 | 无 | 完成 |
 | 2 | novoard-agent | PRD-7 A2 调度器、A3 路径锁、A4 uses step | A1；A4 另需 P1 | 完成；Windows 验收暂缓，偏差见 PRD-7 |
-| 3 | Novoard | PRD-6 H2–H4 来源清单 | H1 | 未开始 |
-| 3 | novoard-agent | PRD-7 A5 包管理 | A4、H4 | 未开始 |
+| 3 | Novoard | PRD-6 H2–H4 来源清单 | H1 | 完成，偏差见 PRD-6 |
+| 3 | novoard-agent | PRD-7 A5 包管理 | A4、H4 | 完成，偏差见 PRD-7；两侧真实进程联调随 A7 |
 | 4 | novoard-agent | PRD-7 A6 缺包诊断、A7 控制台 | A2、A5 | 未开始 |
 | 4 | novoard-packs | README P4–P5 统一 CLI、进度 | P1–P3 | 未开始 |
 | 4 | OSGToolset | README O2–O3 取消收尾、进度 | A4 | 未开始 |
