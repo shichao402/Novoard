@@ -12,6 +12,7 @@
 | H2 | 来源清单存储 `src/pack-sources.mjs` | 无 |
 | H3 | 管理台：来源清单增删改 | H2 |
 | H4 | hello.ack 下发 `packSources` | H1、H2 |
+| H5 | 契约 v2.5：来源包名自动发现，来源按仓库地址 + 分支 + 子目录识别 | H2–H4 |
 
 H1 完成后通知 agent 仓开始 A1。两仓同批发布（[contracts.md](../architecture/contracts.md) §0）。
 
@@ -117,6 +118,20 @@ target 依赖的能力包在本机不可用（诊断有 error）时，该 target
 - 校验之外再加：branch 不能含空白、不能以 `-` 开头；subdir 统一成 `/` 分隔，拒绝绝对路径和 `..`，值为 `.` 或空视为未设置。文件损坏时拒绝读写，不按空清单处理。
 - 读来源失败时 hello.ack 不带 `packSources`，agent 保留旧缓存，不会被清空。
 - H4 联调：hub 侧单测验证 ack 带 `packSources` 且通过契约校验；agent 侧单测用 mock hub 验证缓存落盘。两侧真实进程对接留到 A7 控制台验收时一起做。
+
+## H5 契约 v2.5：包名自动发现（2026-11-11）
+
+起因：管理台新增来源要手输包 id，容易和仓库里 toolset.json 的 id 对不上。决定：包名由 agent 安装时从 toolset.json 读出，用户不用填，但允许覆盖。
+
+- 契约：`hello.ack.packSources[].id` 从必填改为可选，语义变成「包名覆盖」。required 为 `["git","branch"]`。版本升到 2.5，conformance 补无 id 正例、非法 id 反例。
+- 来源身份：`git + branch + subdir` 三元组。git 规范化规则是去掉末尾 `/` 和 `.git`，scheme、host 小写（scp 形式的 host 也小写）。hub 的 `packSourceIdentity` 与 agent 的 `sourceIdentity` 必须一致。
+- 存储：`pack-sources.json` 升到 schemaVersion 2，每条带 hub 内部 key（`ps-<12hex>`），`wire()` 下发前去掉 key。读到 v1 时丢弃 id（当时都是手输的，按自动发现处理）、生成 key、去重，并立即写回。v2 里 key 非法时拒绝读写。
+- 冲突：同一身份重复返回 409 `pack-source-conflict`；两个来源填了相同的覆盖名返回 409 `pack-name-conflict`。
+- HTTP 接口：`POST /api/pack-sources` 新建，`PUT`/`DELETE /api/pack-sources/:key` 修改或删除，找不到返回 404。权限、CSRF、审计同 H3。
+- 管理台：列为仓库、子目录、分支、包名（未覆盖时显示「自动」）。包名覆盖收在「高级」里。提示私有仓到 agent「设置 → Git 凭据」配置。
+- 凭据不经过 hub。git 仓默认按公开仓处理。
+- 升级顺序：先发 agent，再发 hub。v2.4 agent 会丢掉不带 id 的条目，先升 hub 会导致旧 agent 看不到这些来源（已装的包不受影响）。
+- 验收：`test/pack-sources.test.mjs` 覆盖增删改、非法输入、去重与冲突、v1 迁移、损坏文件拒绝、接口状态码（401/403/201/200/400/404/409）、下发不带 key；`web/test/pack-sources.test.tsx` 覆盖新增时显示「自动」、包名覆盖实时校验、按行 key 编辑和删除。
 
 ## 不做
 

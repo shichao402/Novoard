@@ -25,7 +25,7 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
   function packSourcesField() {
     if (!packSources) return {};
     try {
-      return { packSources: packSources.list() };
+      return { packSources: packSources.wire() };
     } catch (error) {
       log.error?.(`[pack-sources] 读取失败，本次 hello.ack 不下发来源：${error.message}`);
       return {};

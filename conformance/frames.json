@@ -1,5 +1,5 @@
 {
-  "version": "2.4",
+  "version": "2.5",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {
@@ -472,6 +472,20 @@
       "expect": "reject",
       "desc": "v2.4：packSources 项缺 branch",
       "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.4","packSources":[{"id":"osg","git":"git@example.com:t/osg.git"}]}
+    },
+    {
+      "id": "good-hello-ack-pack-source-no-id",
+      "target": "ops:agent.hello.ack",
+      "expect": "pass",
+      "desc": "v2.5：packSources 项 id 可选（agent 从 toolset.json 自动发现包名）",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.5","packSources":[{"git":"https://example.com/packs.git","branch":"main","subdir":"packs/versionControl"},{"id":"vc2","git":"https://example.com/packs.git","branch":"dev","subdir":"packs/versionControl"}]}
+    },
+    {
+      "id": "bad-hello-ack-pack-source-bad-id",
+      "target": "ops:agent.hello.ack",
+      "expect": "reject",
+      "desc": "v2.5：包名覆盖仍须符合包 id 格式",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.5","packSources":[{"id":"1bad","git":"https://example.com/packs.git","branch":"main"}]}
     }
   ]
 }

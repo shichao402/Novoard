@@ -737,8 +737,10 @@ export function startServer({
         return;
       }
 
-      const packSourceRoute = pathname.match(/^\/api\/pack-sources\/([^/]+)$/);
-      if (packSourceRoute && (req.method === "PUT" || req.method === "DELETE")) {
+      const packSourceRoute = pathname === "/api/pack-sources" && req.method === "POST"
+        ? [pathname, null]
+        : (req.method === "PUT" || req.method === "DELETE") ? pathname.match(/^\/api\/pack-sources\/([^/]+)$/) : null;
+      if (packSourceRoute) {
         const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
         if (!authn) return;
         if (!packSources) {
@@ -746,18 +748,26 @@ export function startServer({
           return;
         }
         try {
-          const id = decodeURIComponent(packSourceRoute[1]);
+          const key = packSourceRoute[1] === null ? null : decodeURIComponent(packSourceRoute[1]);
+          const actor = authn.principal.actor;
+          const brief = (s) => ({ key: s.key, git: s.git, branch: s.branch, subdir: s.subdir ?? null, id: s.id ?? null });
           if (req.method === "DELETE") {
-            const removed = packSources.remove(id);
-            auditLine({ target: "hub", outcome: "completed", detail: { reason: "pack-source-removed", id, removed } }, authn.principal.actor, "ops");
-            sendJson(res, 200, { ok: true, id, removed });
+            const removed = packSources.remove(key);
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "pack-source-removed", key, removed: Boolean(removed), ...(removed ? { source: brief(removed) } : {}) } }, actor, "ops");
+            sendJson(res, 200, { ok: true, key, removed: Boolean(removed) });
             return;
           }
           const payload = await readJson(req);
           const input = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
-          const { source, created } = packSources.upsert({ ...input, id });
-          auditLine({ target: "hub", outcome: "completed", detail: { reason: created ? "pack-source-added" : "pack-source-updated", id } }, authn.principal.actor, "ops");
-          sendJson(res, created ? 201 : 200, { source, created });
+          if (key === null) {
+            const source = packSources.create(input);
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "pack-source-added", source: brief(source) } }, actor, "ops");
+            sendJson(res, 201, { source });
+          } else {
+            const source = packSources.update(key, input);
+            auditLine({ target: "hub", outcome: "completed", detail: { reason: "pack-source-updated", source: brief(source) } }, actor, "ops");
+            sendJson(res, 200, { source });
+          }
         } catch (error) {
           sendIdentityError(res, error);
         }
@@ -1204,7 +1214,7 @@ function sendIdentityError(res, error) {
   const code = String(error?.code ?? "identity_error");
   const status = code === "already-initialized" || code.endsWith("-conflict") || code === "role-in-use" || code === "rotation-in-progress"
     ? 409
-    : code === "user-not-found" || code === "role-not-found" || code === "pat-not-found"
+    : code === "user-not-found" || code === "role-not-found" || code === "pat-not-found" || code === "pack-source-not-found"
       ? 404
       : code === "forbidden" || code === "last-superadmin" || code === "scope-exceeds-role" || code === "reserved-permission"
         ? 403

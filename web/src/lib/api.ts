@@ -176,10 +176,17 @@ export interface WecomConfig {
   serviceAccount: User | null;
 }
 
-/** 能力包来源（PRD-6 H2），与契约 hello.ack packSources.items 同形。 */
-export interface PackSource {
-  id: string;
+/**
+ * 能力包来源（PRD-6 H2/H5）。key 是 hub 内部标识，下发给 agent 时去掉；
+ * 其余字段与契约 hello.ack packSources.items 同形。id 是可选的包名覆盖，缺省时 agent 自动发现。
+ */
+export interface PackSourceInput {
   git: string;
   branch: string;
   subdir?: string;
+  id?: string;
+}
+
+export interface PackSource extends PackSourceInput {
+  key: string;
 }

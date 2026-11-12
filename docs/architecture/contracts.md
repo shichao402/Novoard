@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.4（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.5（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.4`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.5`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -213,14 +213,15 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 - 连接关闭只释放自己那条连接：被接管的旧连接稍后收到 close 时，不得把已由新连接承载的成员标为离线。
 - 同机同数据目录的重复启动由 agent 本地单实例锁先行拦截；hub 侧规则负责跨机器兜底。
 
-注册成功回 `agent.hello.ack`：`inFlightTaskIds` 是 hub 侧仍在途、要求 agent 对账的任务（§4.4）；`hubVersion` 是 hub 侧契约版本；`packSources`（v2.4，可选）是能力包来源清单，每项 `id` / `git` / `branch` / 可选 `subdir`，agent 缓存后供包管理器拉取。缺省表示 hub 未下发，agent 沿用本地缓存；旧 agent 忽略该字段。
+注册成功回 `agent.hello.ack`：`inFlightTaskIds` 是 hub 侧仍在途、要求 agent 对账的任务（§4.4）；`hubVersion` 是 hub 侧契约版本；`packSources`（v2.4，可选）是能力包来源清单，每项 `git` / `branch` / 可选 `subdir` / 可选 `id`，agent 缓存后供包管理器拉取。来源身份是 `git` + `branch` + `subdir` 三元组，同一三元组只出现一次。`id`（v2.5 起可选）是包名覆盖：缺省时 agent 克隆后读包根 `toolset.json` 的 `id` 作为包名；填写时以它为准，用于同一个包从两个分支并装等重名场景。两个来源解析出同一包名时，agent 拒绝后装的那个并在包状态里报冲突，不静默覆盖。私有仓认证不经 hub：hub 只下发地址，凭据由 agent 本机按 URL 前缀配置。缺省 `packSources` 表示 hub 未下发，agent 沿用本地缓存；旧 agent 忽略该字段。v2.4 agent 会丢弃不带 `id` 的项，升级顺序为先 agent 后 hub。
 
 <!-- contract-example: ops:agent.hello.ack -->
 ```json
-{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.4",
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.5",
   "packSources": [
-    { "id": "versionControl", "git": "https://github.com/example/novoard-packs.git", "branch": "main", "subdir": "packs/versionControl" },
-    { "id": "osg", "git": "git@example.com:team/OSGToolset.git", "branch": "main" }
+    { "git": "https://github.com/example/novoard-packs.git", "branch": "main", "subdir": "packs/versionControl" },
+    { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },
+    { "id": "osgNext", "git": "https://git.example.com/team/OSGToolset.git", "branch": "next" }
   ] }
 ```
 
