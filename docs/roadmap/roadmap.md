@@ -195,10 +195,10 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 
 | 波次 | 仓库 | 任务 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H5 契约 v2.5、来源按 key 增删改、管理台包名「自动」 | 无 | 代码完成，待提交 |
-| 1 | novoard-agent | PRD-7 A8 自发现包名、目录对齐、本机 Git 凭据、设置页与能力包页 | H5 | 代码完成，待提交 |
-| 2 | novoard-agent | Target 表单化（定时、步骤、按 manifest 生成参数表单），修复保存时丢 schedule/oncePerDay/deadline/uses | A8 | 未开始 |
-| 2 | novoard-packs、OSGToolset | manifest 补 label、description、format，供参数表单使用 | 无 | 未开始 |
+| 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H5 契约 v2.5、来源按 key 增删改、管理台包名「自动」 | 无 | 完成（a67bb39、429d3e4） |
+| 1 | novoard-agent | PRD-7 A8 自发现包名、目录对齐、本机 Git 凭据、设置页与能力包页 | H5 | 完成（aa08f5a） |
+| 2 | novoard-agent | Target 表单化（定时、步骤、按 manifest 生成参数表单），修复保存时丢 schedule/oncePerDay/deadline/uses | A8 | 完成（agent 3f104a2） |
+| 2 | novoard-packs、OSGToolset | manifest 补 label、description、format，供参数表单使用 | 无 | 完成（novoard-packs c31cb5b、OSGToolset 7c680aa）；novoard-packs 的 path 参数沿用自 cronkit 但工具不读取，已如实标注，修复另议 |
 | 3 | 发布 | 先发 agent v0.3.7，再发 hub v0.3.8（v2.4 agent 会丢弃不带 id 的来源）；Mac 上用表单建定时 git-pull 联调 | 1、2 | 未开始 |
 
 ## 里程碑之外（暂不排期）
