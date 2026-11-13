@@ -185,7 +185,7 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 3 | novoard-agent | PRD-7 A5 包管理 | A4、H4 | 完成，偏差见 PRD-7；两侧真实进程联调随 A7 |
 | 4 | novoard-agent | PRD-7 A6 缺包诊断、A7 控制台 | A2、A5 | 完成，偏差见 PRD-7 |
 | 4 | novoard-packs | README P4–P5 统一 CLI、进度 | P1–P3 | 完成，偏差见 PRD-7 |
-| 4 | OSGToolset | README O2–O3 取消收尾、进度 | A4 | 完成；Windows 上优雅收尾不生效（靠强杀兜底），偏差见 PRD-7 |
+| 4 | OSGToolset | README O2–O3 取消收尾、进度 | A4 | 完成；Windows 上优雅收尾不生效（靠强杀兜底），偏差见 PRD-7；2026-11-13 改为经 stdin 取消 |
 | 5 | cronkit | retire-plan C1 冻结、C2 导出脚本 | H1 | 完成 |
 | 6 | cronkit | retire-plan C3 逐个迁移（Windows），C4 退役 | 以上全部 | C3 取消（不迁移，退役后在 agent 中重新配置）；C4 仓库已归档，Windows 上卸载托盘待手动完成 |
 
@@ -198,8 +198,18 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 1 | Novoard | [PRD-6](../prd/prd-6-local-schedule-and-capability-packs.md) H5 契约 v2.5、来源按 key 增删改、管理台包名「自动」 | 无 | 完成（a67bb39、429d3e4） |
 | 1 | novoard-agent | PRD-7 A8 自发现包名、目录对齐、本机 Git 凭据、设置页与能力包页 | H5 | 完成（aa08f5a） |
 | 2 | novoard-agent | Target 表单化（定时、步骤、按 manifest 生成参数表单），修复保存时丢 schedule/oncePerDay/deadline/uses | A8 | 完成（agent 3f104a2） |
-| 2 | novoard-packs、OSGToolset | manifest 补 label、description、format，供参数表单使用 | 无 | 完成（novoard-packs c31cb5b、OSGToolset 7c680aa）；novoard-packs 的 path 参数沿用自 cronkit 但工具不读取，已如实标注，修复另议 |
-| 3 | 发布 | 先发 agent v0.3.7，再发 hub v0.3.8（v2.4 agent 会丢弃不带 id 的来源）；Mac 上用表单建定时 git-pull 联调 | 1、2 | 未开始 |
+| 2 | novoard-packs、OSGToolset | manifest 补 label、description、format，供参数表单使用 | 无 | 完成（novoard-packs c31cb5b、OSGToolset 7c680aa）；novoard-packs 的 path 参数沿用自 cronkit 但工具不读取，已如实标注，2026-11-13 删除，见下「取消经 stdin 下发与 path 参数删除」 |
+| 3 | 发布 | 先发 agent v0.3.7，再发 hub v0.3.8（v2.4 agent 会丢弃不带 id 的来源）；Mac 上用表单建定时 git-pull 联调 | 1、2 | 完成（agent v0.3.7、hub v0.3.8 已上线） |
+
+## 跨仓：取消经 stdin 下发与 path 参数删除（2026-11-13）
+
+起因：Windows 上不带 /F 的 `taskkill /T` 对控制台进程无效，包收不到中断，3 秒后被强杀，结果文件写不出、svn 工作副本被锁；novoard-packs 的 `path` 参数沿用自 cronkit，工具不读。决定：uses step 取消时经 stdin 写 `{"type":"cancel"}`，宽限期 10 秒（novoard-agent ADR-0019 §5 修订）；删除无效 path，agent 对旧定义里的 path 执行期忽略、表单保存时移除。契约不变，hub 不发版。
+
+| 波次 | 仓库 | 任务 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1 | OSGToolset | 读 stdin 取消行，子进程 stdin 置空 | 无 | 代码完成，待推送 |
+| 1 | novoard-packs | CLI 读 stdin 取消行；svn 中断后补跑 cleanup；删除 svn、git、unity-warmup 的 path | 无 | 代码完成，待推送 |
+| 2 | novoard-agent | runner 经 stdin 下发取消、uses 宽限期 10 秒；废弃参数兼容；发 v0.3.8（含 skill 改动 ee679dd） | 1 | 代码完成，待推送发版；Windows 验收暂缓 |
 
 ## 里程碑之外（暂不排期）
 
