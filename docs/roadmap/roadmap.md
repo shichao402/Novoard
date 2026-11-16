@@ -211,6 +211,19 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 1 | novoard-packs | CLI 读 stdin 取消行；svn 中断后补跑 cleanup；删除 svn、git、unity-warmup 的 path | 无 | 代码完成，待推送 |
 | 2 | novoard-agent | runner 经 stdin 下发取消、uses 宽限期 10 秒；废弃参数兼容；发 v0.3.8（含 skill 改动 ee679dd） | 1 | 代码完成，待推送发版；Windows 验收暂缓 |
 
+## 跨仓：工作副本池与磁贴运行时输入（契约 v2.6）
+
+起因：OSG 等大型 SVN 工程按目录管理，换分支要手动找空目录、存改动、重检出。决定：novoard-packs 新增通用包 `workingCopyPool`，按分支取用工作副本（规格见 novoard-packs `docs/prd/working-copy-pool.md`）；磁贴点击时可以选参数，候选项由查询工具（kind query）动态给出（novoard-agent ADR-0020）；hub 只透传并保存 target 的 `inputs`，不渲染选择框。上线顺序：先发 packs，再发 agent，最后发 hub。
+
+| 波次 | 仓库 | 任务 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1 | Novoard、novoard-agent | C1 契约 v2.6：target 增加 `inputs`，两仓锁定拷贝与 CONTRACT_VERSION 同步 | 无 | 代码完成，待推送；两仓契约门禁通过 |
+| 1 | novoard-packs | README P6–P10：shared 类型与 CLI 扩展、svn 模块迁到 shared；workingCopyPool 的 acquire、release、gc、refresh、candidates、occupied、status；general/unity-open | 无 | 代码完成（1f93147），待推送；`npm run check` 全绿（142 项，含 svnadmin + file:// 集成测试） |
+| 2 | novoard-agent | C2 落地 ADR-0020：装载校验、resolveInputs、queryChoices、`/api/targets/:id/inputs`、磁贴选择框、Target 表单编辑 inputs、文档 | C1 | 代码完成，待推送；`npm test` 全绿 |
+| 2 | novoard-agent | S1 内置会话：`novoard_run_target` 带 vars，新增 `novoard_target_inputs` | C2 | 代码完成，待推送 |
+| 3 | novoard-packs、novoard-agent | P11 Windows 实机验收：真实 OSG 池按 US1–US10 验证；跑通“开分支”、“s2pub 开工”、`wc-pool-nightly`；unity-open 取消任务不影响 Unity；内置会话完成占用并在 Cursor 打开 | 以上全部 | 待 Windows 实机验收 |
+| 4 | 发布 | 先发 novoard-packs，再发 agent，最后发 hub | P11 | 未开始 |
+
 ## 里程碑之外（暂不排期）
 
 - 更多 A2A 客户端接入验证（M4 遗留）：当前已接入 With，端点能力齐备，新增客户端属验证性接入

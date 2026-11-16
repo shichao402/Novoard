@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.5（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.6（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。v2.6 只加 Target 可选字段 `inputs`（磁贴点击时选定的运行时参数，ADR-0020），hub 只透传不渲染。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.5`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.6`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -60,6 +60,7 @@ targets:
 | `timeout` | 时长字面（`30s` / `10m` / `1h`），默认 `10m` | 单次运行上限，到点停止。随 card 以 `x-novoard-timeout` 透传 |
 | `lostTtl` | 时长字面，默认 `10m` | 成员断开后，超过此时长仍未带着该任务重连，才把 `working` 收成 `failed` / `agent-lost`。与 `timeout` 分开。随 card 以 `x-novoard-lost` 透传。任务进入 `working` 时抄下当时的值，之后改配置不影响这一单 |
 | `approvalTtl` | 时长字面，默认 `10m` | `requiresApproval` 时 `input-required` 的等待上限，到期 `canceled`（`approval-ttl-expired`）。随 card 以 `x-novoard-approval` 透传。进入 `input-required` 时抄下当时的值 |
+| `inputs` | 数组，每项 `name` / `label` / `choices` / `default` / `allowCustom` / `required` | 点击时由用户选定的运行时参数（v2.6，ADR-0020）。`choices` 是静态字符串数组，或 `{ uses, with?, cwd? }` 指向 `kind: "query"` 的能力包工具；`default: last` 取上次选定值。agent 在受理前取值：触发时传入的值优先，否则用 `default`；必填项仍缺值时按 ADR-0009 当场 failed；静态 `choices` 且 `allowCustom: false` 时值必须在列表内。`name` 不得与 target `vars` 重名。随 card 只写进 skill `description`，不新增 card 扩展字段；hub 只透传不渲染选择框 |
 
 ### 1.2 steps 语法（契约内部化）
 
@@ -137,7 +138,7 @@ steps:
 ```
 
 - 能力包可用性（v2.4）：target 依赖的能力包在本机不可用（诊断有 error）时，该 target 不得出现在 Agent Card skills 中；可用性变化时 agent 发 `card.update`
-- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description 写能力、安排和参数，不只是命令标题；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）。`timeout`、`lostTtl`、`approvalTtl` 分别以 `x-novoard-timeout`、`x-novoard-lost`、`x-novoard-approval` 透传。这些时长在 Agent 的 Target 编辑页调整，Hub 不写死
+- 生成规则：每个 `expose: a2a` 的 target 生成一个 skill 条目；skill id = target id；description 写能力、安排和参数，不只是命令标题；target 的 `offline` / `offlineTtl` 以 `x-novoard-offline` 扩展字段随 skill 透传（hub 路由离线策略查此字段，§1.1；契约 v1.1 新增，schema `additionalProperties` 不受影响）。`timeout`、`lostTtl`、`approvalTtl` 分别以 `x-novoard-timeout`、`x-novoard-lost`、`x-novoard-approval` 透传。这些时长在 Agent 的 Target 编辑页调整，Hub 不写死。target 的 `inputs`（v2.6）写进 description，列出名称、label 和静态候选项，供 Hub 与对等方显式传参，不新增 card 扩展字段
 - 成员介绍：card 可带 `x-novoard-role`（稳定角色，如 `office-pc`）。`description` 是给其他成员看的自我介绍。对话技能 id 为 `converse`，`x-novoard-kind` 固定为 `agent`。这种技能不进全局 skill 路由表，多台成员可以同时声明；Target id 不能占用 `converse`
 - 聚合 card = 当前调用主体 target 范围内、可点名执行的 skills 并集，附同样经过过滤的 `x-novoard-members`（member id → 寻址信息）；端点要求会话或 PAT 的 `targets.read` 权限。`x-novoard-kind: agent` 的技能不进入聚合 card，也不参与 skill id 冲突。其余 skill id 冲突时注册拒绝并回执，先到先得
 - `GET /api/cards`（Bearer agent token）返回各成员已经推上来的完整 card。调用方按角色和介绍自己筛选，Hub 不替它选择 Target
@@ -217,7 +218,7 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 
 <!-- contract-example: ops:agent.hello.ack -->
 ```json
-{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.5",
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.6",
   "packSources": [
     { "git": "https://github.com/example/novoard-packs.git", "branch": "main", "subdir": "packs/versionControl" },
     { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },
