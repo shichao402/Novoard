@@ -4,6 +4,7 @@
  * - H3 管理台接口：POST /api/pack-sources、PUT/DELETE /api/pack-sources/:key 需会话 + CSRF + users.manage，GET 列表；
  * - H4 下发：agent.hello.ack 附上 packSources（去掉 key），且通过契约 schema；
  * - H5 来源以 git+branch+subdir 为身份，包名可选覆盖；v1 数据迁移丢弃旧 id。
+ * - v3（契约 v2.7）：没有包名覆盖的来源是整仓来源，subdir 丢弃；v1/v2 同仓同分支子目录来源合并。
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -38,14 +39,14 @@ test("H2：增删改、重启后保留、文件权限 0600", () => withDir((dir)
   assert.deepEqual(store.list(), []);
   const osg = store.create(OSG);
   assert.match(osg.key, /^ps-[0-9a-f]+$/);
-  const general = store.create({ git: PACKS, subdir: "./packs/general/" });
+  const general = store.create({ git: PACKS, subdir: "./packs/general/", id: "general" });
   assert.equal(general.branch, "main", "branch 缺省为 main");
   store.update(osg.key, { ...OSG, branch: "release" });
 
   const again = createPackSources({ dir });
   assert.deepEqual(again.list().map(strip), [
     { ...OSG, branch: "release" },
-    { git: PACKS, branch: "main", subdir: "packs/general" },
+    { git: PACKS, branch: "main", subdir: "packs/general", id: "general" },
   ]);
   assert.deepEqual(again.list().map((s) => s.key).sort(), [osg.key, general.key].sort(), "key 稳定");
   if (process.platform !== "win32") assert.equal(statSync(again.file).mode & 0o777, 0o600);
@@ -72,47 +73,70 @@ test("H2：非法条目拒绝且不落盘", () => withDir((dir) => {
   assert.deepEqual(store.list(), []);
 }));
 
-test("H5：同来源（git 规范化后）去重，同覆盖名冲突；同仓不同子目录/分支可并存", () => withDir((dir) => {
+test("H5：同仓同分支（git 规范化后）去重，无覆盖名时 subdir 丢弃，同覆盖名冲突", () => withDir((dir) => {
   const store = createPackSources({ dir });
-  store.create({ git: PACKS, subdir: "packs/versionControl" });
+  const whole = store.create({ git: PACKS, subdir: "packs/versionControl" });
+  assert.equal(whole.subdir, undefined, "无包名覆盖即整仓来源");
   for (const dup of [
-    { git: PACKS, subdir: "packs/versionControl/" },
-    { git: "https://GitHub.com/x/novoard-packs", subdir: "packs/versionControl" },
-    { git: `${PACKS}/`, branch: "main", subdir: "packs/versionControl" },
+    { git: PACKS },
+    { git: PACKS, subdir: "packs/general" },
+    { git: "https://GitHub.com/x/novoard-packs" },
+    { git: `${PACKS}/`, branch: "main" },
   ]) {
     assert.throws(() => store.create(dup), (e) => e.code === "pack-source-conflict", JSON.stringify(dup));
   }
-  store.create({ git: PACKS, subdir: "packs/general" });
+  store.create({ git: PACKS, branch: "dev" });
   const dev = store.create({ git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" });
   assert.equal(dev.id, "vcDev");
   assert.throws(() => store.create({ ...OSG, id: "vcDev" }), (e) => e.code === "pack-name-conflict");
   store.update(dev.key, { git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" });
   assert.equal(store.list().length, 3);
-  assert.deepEqual(store.wire().find((s) => s.branch === "dev"), { git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" });
+  assert.deepEqual(store.wire().find((s) => s.id === "vcDev"), { git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" });
   assert.ok(store.wire().every((s) => !("key" in s)), "下发不带 key");
 }));
 
-test("H5：v1 文件迁移——生成 key、丢弃旧 id、同来源只留一条并立即落盘", () => withDir((dir) => {
+test("H5：v1 文件迁移——生成 key、丢弃旧 id、同仓合并为整仓来源并立即落盘", () => withDir((dir) => {
   writeFileSync(join(dir, "pack-sources.json"), JSON.stringify({
     schemaVersion: 1,
     sources: [
       { id: "default", git: PACKS, branch: "main", subdir: "packs/versionControl" },
-      { id: "again", git: PACKS, branch: "main", subdir: "packs/versionControl" },
+      { id: "again", git: PACKS, branch: "main", subdir: "packs/general" },
       { id: "osg", ...OSG },
     ],
   }));
   const store = createPackSources({ dir });
   const listed = store.list();
-  assert.deepEqual(listed.map(strip), [OSG, { git: PACKS, branch: "main", subdir: "packs/versionControl" }]);
+  assert.deepEqual(listed.map(strip), [OSG, { git: PACKS, branch: "main" }]);
   const onDisk = JSON.parse(readFileSync(store.file, "utf8"));
-  assert.equal(onDisk.schemaVersion, 2);
+  assert.equal(onDisk.schemaVersion, 3);
   assert.deepEqual(onDisk.sources.map((s) => s.key).sort(), listed.map((s) => s.key).sort());
+}));
+
+test("H5：v2 文件迁移——同仓子目录来源合并沿用第一条 key，带覆盖名的保留 subdir", () => withDir((dir) => {
+  writeFileSync(join(dir, "pack-sources.json"), JSON.stringify({
+    schemaVersion: 2,
+    sources: [
+      { key: "ps-aaaaaaaaaaaa", ...OSG },
+      { key: "ps-bbbbbbbbbbbb", git: PACKS, branch: "main", subdir: "packs/versionControl" },
+      { key: "ps-cccccccccccc", git: PACKS, branch: "main", subdir: "packs/general" },
+      { key: "ps-dddddddddddd", git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" },
+    ],
+  }));
+  const store = createPackSources({ dir });
+  assert.deepEqual(store.list().map((s) => s.key).sort(), ["ps-aaaaaaaaaaaa", "ps-bbbbbbbbbbbb", "ps-dddddddddddd"]);
+  assert.deepEqual(store.wire(), [
+    { git: PACKS, branch: "main" },
+    { git: PACKS, branch: "dev", subdir: "packs/versionControl", id: "vcDev" },
+    OSG,
+  ].sort((a, b) => a.git.localeCompare(b.git) || (a.subdir ?? "").localeCompare(b.subdir ?? "") || a.branch.localeCompare(b.branch)));
+  assert.equal(JSON.parse(readFileSync(store.file, "utf8")).schemaVersion, 3);
+  assert.equal(createPackSources({ dir }).list().length, 3, "迁移后再读稳定");
 }));
 
 test("H2：损坏文件 fail-closed", () => withDir((dir) => {
   writeFileSync(join(dir, "pack-sources.json"), "{oops");
   assert.throws(() => createPackSources({ dir }).list(), /fail-closed/);
-  writeFileSync(join(dir, "pack-sources.json"), JSON.stringify({ schemaVersion: 2, sources: [{ ...OSG }] }));
+  writeFileSync(join(dir, "pack-sources.json"), JSON.stringify({ schemaVersion: 3, sources: [{ ...OSG }] }));
   assert.throws(() => createPackSources({ dir }).list(), /key/);
 }));
 

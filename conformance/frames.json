@@ -1,5 +1,5 @@
 {
-  "version": "2.6",
+  "version": "2.7",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {

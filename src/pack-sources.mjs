@@ -7,6 +7,10 @@
  * - id 变成可选的「包名覆盖」，缺省时 agent 从包根 toolset.json 自动发现；
  * - 同一 git + branch + subdir 只允许一条；两条来源填了同一覆盖名也拒绝。
  * v1 文件（id 必填）读取时迁移：生成 key、丢弃旧 id（旧 id 是人填的，常填错，不保留）。
+ *
+ * v3（契约 v2.7）：Hub 只登记仓库地址和分支，agent 扫描仓库里所有 toolset.json，子目录不再由人填。
+ * - 没有包名覆盖的来源一律是整仓来源，subdir 丢弃；只有填了覆盖名（同包并装）才保留 subdir；
+ * - v1/v2 文件迁移：同仓同分支的子目录来源合并成一条整仓来源，沿用第一条的 key。
  */
 import {
   chmodSync,
@@ -24,7 +28,7 @@ import {
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const KEY_PATTERN = /^ps-[0-9a-f]{8,32}$/;
 export const PACK_ID_PATTERN = /^[A-Za-z][A-Za-z0-9-]*$/;
 const MAX_LEN = 512;
@@ -80,6 +84,8 @@ export function normalizePackSource(input) {
     }
     if (!subdir || subdir === ".") subdir = undefined;
   }
+  // v3（契约 v2.7）：来源默认是整仓，agent 自己扫描包根；子目录只在填了包名覆盖时有意义（并装场景）
+  if (id === undefined) subdir = undefined;
   const out = { git, branch };
   if (subdir !== undefined) out.subdir = subdir;
   if (id !== undefined) out.id = id;
@@ -98,7 +104,7 @@ function assertUnique(sources, candidate, exceptKey) {
   for (const other of sources) {
     if (other.key === exceptKey) continue;
     if (packSourceIdentity(other) === identity) {
-      throw conflict("pack-source-conflict", "同一仓库、分支、子目录的来源已存在");
+      throw conflict("pack-source-conflict", "同一仓库和分支的来源已存在");
     }
     if (candidate.id && other.id === candidate.id) {
       throw conflict("pack-name-conflict", `包名 ${candidate.id} 已被另一条来源占用`);
@@ -123,14 +129,16 @@ export function createPackSources({ dir } = {}) {
       throw new Error(`pack-sources.json 损坏，已 fail-closed：${error.message}`);
     }
     if (!Array.isArray(parsed?.sources)) throw new Error("pack-sources.json 结构不支持");
-    if (parsed.schemaVersion === 1) {
-      // v1 → v2：生成 key、丢弃人填的旧 id，同来源只留第一条。迁移结果立即落盘，保证 key 稳定。
+    if (parsed.schemaVersion === 1 || parsed.schemaVersion === 2) {
+      // v1/v2 → v3：v1 丢弃人填的旧 id；没有包名覆盖的子目录来源合并成整仓来源（agent 自己扫描包根），
+      // 同仓同分支只留第一条并沿用它的 key。迁移结果立即落盘，保证 key 稳定。
       const sources = [];
       for (const raw of parsed.sources) {
-        const { id: _dropped, ...rest } = raw ?? {};
-        const source = normalizePackSource(rest);
+        const { id: dropped, ...rest } = raw ?? {};
+        const source = normalizePackSource(parsed.schemaVersion === 1 ? rest : { ...rest, ...(dropped ? { id: dropped } : {}) });
         if (sources.some((s) => packSourceIdentity(s) === packSourceIdentity(source))) continue;
-        sources.push({ key: newKey(), ...source });
+        const key = typeof raw?.key === "string" && KEY_PATTERN.test(raw.key) ? raw.key : newKey();
+        sources.push({ key, ...source });
       }
       const data = { schemaVersion: SCHEMA_VERSION, sources };
       save(data);

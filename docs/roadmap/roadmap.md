@@ -224,6 +224,17 @@ M7 拆仓后的运行期清理与验收面收口，一轮四件事：
 | 3 | novoard-packs、novoard-agent | P11 Windows 实机验收：真实 OSG 池按 US1–US10 验证；跑通“开分支”、“s2pub 开工”、`wc-pool-nightly`；unity-open 取消任务不影响 Unity；内置会话完成占用并在 Cursor 打开 | 以上全部 | 待 Windows 实机验收 |
 | 4 | 发布 | 先发 novoard-packs，再发 agent，最后发 hub | P11 | 未开始 |
 
+## 跨仓：能力包整仓扫描与自动添加（契约 v2.7）
+
+起因：Hub 加能力包来源要手填子目录。决定：Hub 只登记仓库和分支，子目录扫描、自动添加、懒添加都在 agent 本机完成。上线顺序：先发 agent，再发 hub；hub 启动时自动把同仓的子目录来源合并成整仓来源，已装包不用重装。
+
+| 波次 | 仓库 | 任务 | 依赖 | 状态 |
+| --- | --- | --- | --- | --- |
+| 1 | Novoard、novoard-agent | 契约 v2.7：整仓来源语义，两仓 schema 与 CONTRACT_VERSION 同步 | 无 | 代码完成；两仓契约门禁通过 |
+| 1 | novoard-agent | PRD-7 A10：整仓扫描、本机「自动添加」、定时同步与懒添加、能力包页仓库卡片 | 无 | 代码完成；`npm test` 全绿 |
+| 2 | Novoard | PRD-6 H6：pack-sources v3 迁移、管理台只填仓库和分支 | 契约 v2.7 | 代码完成；`npm test` 全绿 |
+| 3 | 发布 | 先发 agent，再发 hub | 以上 | 未开始 |
+
 ## 里程碑之外（暂不排期）
 
 - 更多 A2A 客户端接入验证（M4 遗留）：当前已接入 With，端点能力齐备，新增客户端属验证性接入

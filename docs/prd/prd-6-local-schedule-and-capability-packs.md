@@ -13,6 +13,7 @@
 | H3 | 管理台：来源清单增删改 | H2 |
 | H4 | hello.ack 下发 `packSources` | H1、H2 |
 | H5 | 契约 v2.5：来源包名自动发现，来源按仓库地址 + 分支 + 子目录识别 | H2–H4 |
+| H6 | 契约 v2.7：Hub 只登记仓库和分支，子目录扫描与自动添加交给 agent | H5；agent A10 |
 
 H1 完成后通知 agent 仓开始 A1。两仓同批发布（[contracts.md](../architecture/contracts.md) §0）。
 
@@ -132,6 +133,17 @@ target 依赖的能力包在本机不可用（诊断有 error）时，该 target
 - 凭据不经过 hub。git 仓默认按公开仓处理。
 - 升级顺序：先发 agent，再发 hub。v2.4 agent 会丢掉不带 id 的条目，先升 hub 会导致旧 agent 看不到这些来源（已装的包不受影响）。
 - 验收：`test/pack-sources.test.mjs` 覆盖增删改、非法输入、去重与冲突、v1 迁移、损坏文件拒绝、接口状态码（401/403/201/200/400/404/409）、下发不带 key；`web/test/pack-sources.test.tsx` 覆盖新增时显示「自动」、包名覆盖实时校验、按行 key 编辑和删除。
+
+## H6 契约 v2.7：只登记仓库（2026-11-19）
+
+起因：同一个仓库里每个包都要手填子目录登记一遍。决定：Hub 只登记仓库地址和分支，agent 自己扫描仓库里的全部 `toolset.json`，是否自动安装由 agent 本机的「自动添加」开关决定（novoard-agent PRD-7 A10）。
+
+- 契约：不带 `id` 的 `packSources` 项是整仓来源，hub 不下发其 `subdir`。`subdir` 只在带包名覆盖时保留（同包并装）。版本升到 2.7。
+- 存储：`pack-sources.json` 升到 schemaVersion 3。`normalizePackSource` 在没有 `id` 时丢弃 `subdir`。读到 v1/v2 时迁移：v1 丢弃 id；同仓同分支的子目录来源合并成一条整仓来源，沿用第一条的 key；带 id 的保留 subdir；立即写回。
+- 冲突：同一仓库和分支只能登记一条整仓来源，重复返回 409 `pack-source-conflict`。
+- 管理台：表单只有仓库和分支；旧的包名覆盖条目显示「包名覆盖 id / subdir」，编辑时保留这些字段。提示「自动添加」在 agent 本机设置。
+- 升级顺序：先发 agent，再发 hub。v2.6 及更早的 agent 收到整仓来源会去仓库根找 toolset.json，报 `manifest-missing`。
+- 验收：`test/pack-sources.test.mjs` 覆盖无覆盖名时丢弃 subdir、同仓同分支冲突、v1 合并迁移、v2 合并迁移沿用第一条 key 且保留带 id 的 subdir。
 
 ## 不做
 
