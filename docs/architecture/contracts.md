@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.7（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。v2.6 只加 Target 可选字段 `inputs`（磁贴点击时选定的运行时参数，ADR-0020），hub 只透传不渲染。v2.7 把不带 `id` 的 `packSources` 项定为整仓来源：agent 扫描仓库内全部 `toolset.json` 自行发现包，Hub 不再登记子目录。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.8（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。v2.6 只加 Target 可选字段 `inputs`（磁贴点击时选定的运行时参数，ADR-0020），hub 只透传不渲染。v2.7 把不带 `id` 的 `packSources` 项定为整仓来源：agent 扫描仓库内全部 `toolset.json` 自行发现包，Hub 不再登记子目录。v2.8 只加可选字段 `agent.hello.ack.recommendedAgentVersion` / `agent.hello.nack.recommendedAgentVersion`（hub 推荐的 agent 程序版本，低于它的 agent 立刻检查更新、空闲时自动安装）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.7`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.8`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -218,9 +218,11 @@ agent 出站 WebSocket 长连接（wss），Upgrade 请求携带 `Authorization:
 
 v2.7 起，不带 `id` 的项是整仓来源，hub 只登记 `git` + `branch`，不再下发 `subdir`。agent 浅克隆仓库，扫描所有 `toolset.json`（深度不超过 5 层，跳过隐藏目录与 `node_modules` 等，包根内不再往下找），每个包根作为一个派生来源，本机 key 与旧版手填子目录的来源一致，已装包无需重装。是否把扫到的包自动装上（「自动添加」）只在 agent 本机设置，hub 不感知；agent 定时重扫，按包名找不到时若仓库扫描已过期也会先重扫（懒添加）。`subdir` 只在带 `id`（包名覆盖）时保留。v2.6 及更早的 agent 收到整仓来源会去仓库根找 `toolset.json`，升级顺序仍是先 agent 后 hub。
 
+v2.8 起，hub 在 `agent.hello.ack` 里带可选的 `recommendedAgentVersion`（agent 程序版本 `x.y.z`，不是契约版本）。agent 的 `agent.hello.app.version` 低于它时，桌面壳立刻向 relkit 检查更新、自动下载，并等本机没有执行中的任务、审批挂起的任务和进行中的对话轮次时自动安装（agent ADR-0022）。等于或高于时不做任何事；缺省表示 hub 不推荐，agent 只按自己的定时检查跟随。`contract-major-mismatch` 与 `contract-schema-mismatch` 两种 nack 也带这个字段，此时 agent 不论版本高低都立刻检查更新——契约不兼容本身就说明需要升级。推荐版本由 hub 仓 `src/agent-release.mjs` 维护，可用环境变量 `NOVOARD_RECOMMENDED_AGENT_VERSION` 临时覆盖；只发 agent 不发 hub 时不必改。旧 agent 忽略该字段。
+
 <!-- contract-example: ops:agent.hello.ack -->
 ```json
-{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.7",
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.8", "recommendedAgentVersion": "0.3.14",
   "packSources": [
     { "git": "https://github.com/example/novoard-packs.git", "branch": "main" },
     { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },

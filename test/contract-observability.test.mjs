@@ -17,6 +17,7 @@ import { WebSocket } from "ws";
 import { createHub } from "../src/main.mjs";
 import { configureTestAgentTokens } from "./test-auth.mjs";
 import { CONTRACT_VERSION } from "../src/contract/version.mjs";
+import { RECOMMENDED_AGENT_VERSION, recommendedAgentVersion, recommendedAgentVersionField } from "../src/agent-release.mjs";
 
 const CARD = {
   name: "mac-work",
@@ -132,6 +133,34 @@ test("agent.hello.ack 回带 hubVersion，agent 可记录双方版本", async ()
   } finally {
     await ctx.close();
   }
+});
+
+test("agent.hello.ack 带推荐的 agent 程序版本（v2.8），agent 据此自动升级", async () => {
+  const ctx = await boot();
+  try {
+    const conn = await ctx.connect();
+    conn.ws.send(JSON.stringify({
+      v: 1,
+      kind: "ops",
+      msgId: "e-hello-recommended",
+      ts: new Date().toISOString(),
+      body: helloBody(),
+    }));
+    await waitFor(() => conn.frames.some((f) => f.body?.type === "agent.hello.ack"));
+    const ack = conn.frames.find((f) => f.body?.type === "agent.hello.ack");
+    assert.equal(ack.body.recommendedAgentVersion, recommendedAgentVersion(), "ack 应带 hub 推荐的 agent 版本");
+  } finally {
+    await ctx.close();
+  }
+});
+
+test("推荐版本：环境变量覆盖，非法值或空串时不下发", () => {
+  assert.match(RECOMMENDED_AGENT_VERSION, /^\d+\.\d+\.\d+$/);
+  assert.equal(recommendedAgentVersion({}), RECOMMENDED_AGENT_VERSION);
+  assert.equal(recommendedAgentVersion({ NOVOARD_RECOMMENDED_AGENT_VERSION: "0.9.1" }), "0.9.1");
+  assert.equal(recommendedAgentVersion({ NOVOARD_RECOMMENDED_AGENT_VERSION: "v0.9.1" }), "");
+  assert.deepEqual(recommendedAgentVersionField({ NOVOARD_RECOMMENDED_AGENT_VERSION: "bad" }), {});
+  assert.deepEqual(recommendedAgentVersionField({ NOVOARD_RECOMMENDED_AGENT_VERSION: "1.2.3" }), { recommendedAgentVersion: "1.2.3" });
 });
 
 test("注册审计记录双方契约版本，事后可回溯", async () => {

@@ -1,5 +1,5 @@
 {
-  "version": "2.7",
+  "version": "2.8",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {
@@ -458,6 +458,27 @@
       "expect": "pass",
       "desc": "v2.4：ack 下发能力包来源清单",
       "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.4","packSources":[{"id":"versionControl","git":"https://example.com/packs.git","branch":"main","subdir":"packs/versionControl"},{"id":"osg","git":"git@example.com:t/osg.git","branch":"main"}]}
+    },
+    {
+      "id": "good-hello-ack-recommended-agent-version",
+      "target": "ops:agent.hello.ack",
+      "expect": "pass",
+      "desc": "v2.8：ack 带推荐的 agent 程序版本",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.8","recommendedAgentVersion":"0.3.14"}
+    },
+    {
+      "id": "bad-hello-ack-recommended-agent-version",
+      "target": "ops:agent.hello.ack",
+      "expect": "reject",
+      "desc": "v2.8：推荐版本必须是 x.y.z，不能带 v 前缀或构建号",
+      "frame": {"type":"agent.hello.ack","inFlightTaskIds":[],"hubVersion":"2.8","recommendedAgentVersion":"v0.3.14"}
+    },
+    {
+      "id": "good-hello-nack-recommended-agent-version",
+      "target": "ops:agent.hello.nack",
+      "expect": "pass",
+      "desc": "v2.8：契约不兼容的 nack 带推荐版本，agent 据此自动升级",
+      "frame": {"type":"agent.hello.nack","reason":"contract-major-mismatch","hubVersion":"3.0","recommendedAgentVersion":"1.0.0"}
     },
     {
       "id": "good-hello-ack-no-pack-sources",

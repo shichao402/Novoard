@@ -10,6 +10,7 @@ import { lostMessage } from "./queue.mjs";
 import { newMsgId } from "./registry.mjs";
 // 契约版本单一来源（需求 4）：升级契约只改 src/contract/version.mjs
 import { CONTRACT_VERSION } from "./contract/version.mjs";
+import { recommendedAgentVersionField } from "./agent-release.mjs";
 
 export { CONTRACT_VERSION };
 
@@ -181,6 +182,8 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
           type: "agent.hello.nack",
           reason: "contract-schema-mismatch",
           hubVersion: CONTRACT_VERSION,
+          // 契约不兼容类拒绝带上推荐版本：agent 据此立刻自动升级，不用等下一次定时检查（v2.8）
+          ...recommendedAgentVersionField(),
           agentVersion: typeof body?.contractVersion === "string" ? body.contractVersion : undefined,
           retryable: false,
           detail,
@@ -203,7 +206,7 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
 
     if (type === "agent.hello") {
       if (majorOf(body.contractVersion) !== majorOf(CONTRACT_VERSION)) {
-        sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: "contract-major-mismatch", hubVersion: CONTRACT_VERSION }));
+        sendEnvelope(ws, opsFrame({ type: "agent.hello.nack", reason: "contract-major-mismatch", hubVersion: CONTRACT_VERSION, ...recommendedAgentVersionField() }));
         return;
       }
       const authenticatedId = authenticatedAgentId.get(ws);
@@ -257,6 +260,8 @@ export function attachTunnel({ server, registry, queue, audit, artifacts, member
         type: "agent.hello.ack",
         inFlightTaskIds: body.inFlightTaskIds ?? [],
         hubVersion: CONTRACT_VERSION,
+        // 推荐的 agent 程序版本（v2.8）：低于它的 agent 立刻检查更新、空闲时自动安装
+        ...recommendedAgentVersionField(),
         ...packSourcesField(),
       }));
       reconcileCanceledTasks(ws, body.agentId, body.inFlightTaskIds ?? []);
