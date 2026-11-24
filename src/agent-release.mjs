@@ -11,7 +11,7 @@
  */
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
-export const RECOMMENDED_AGENT_VERSION = "0.3.15";
+export const RECOMMENDED_AGENT_VERSION = "0.3.17";
 
 export function recommendedAgentVersion(env = process.env) {
   const override = String(env.NOVOARD_RECOMMENDED_AGENT_VERSION ?? "").trim();

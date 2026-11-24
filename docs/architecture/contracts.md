@@ -236,7 +236,7 @@ v2.8 起，hub 在 `agent.hello.ack` 里带可选的 `recommendedAgentVersion`�
 
 <!-- contract-example: ops:agent.hello.ack -->
 ```json
-{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.9", "recommendedAgentVersion": "0.3.15",
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.9", "recommendedAgentVersion": "0.3.17",
   "packSources": [
     { "git": "https://github.com/example/novoard-packs.git", "branch": "main" },
     { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },
