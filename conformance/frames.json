@@ -1,5 +1,5 @@
 {
-  "version": "2.8",
+  "version": "2.9",
   "note": "契约一致性夹具（需求 5）。版本须与 CONTRACT_VERSION 一致，不匹配时校验方必须明确报错而非跳过。",
   "cases": [
     {
@@ -451,6 +451,34 @@
       "expect": "reject",
       "desc": "v2.4：deadline 不接受 24:00",
       "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","schedule":"0 2 * * *","deadline":"24:00","steps":[{"script":"echo"}]}}}
+    },
+    {
+      "id": "good-target-step-when",
+      "target": "targets",
+      "expect": "pass",
+      "desc": "v2.9：script / openApp / openPath / uses step 可带 when",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"script":"echo","when":"{{run}}"},{"openApp":"rider","when":"{{openRider}}"},{"openPath":"D:/x","when":"true"},{"uses":"general/unity-open","cwd":"D:/x","when":"{{openUnity}}"}]}}}
+    },
+    {
+      "id": "bad-target-step-when-empty",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.9：when 不能是空串",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"script":"echo","when":""}]}}}
+    },
+    {
+      "id": "bad-target-step-when-boolean",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.9：when 只接受字符串（插值后再判真假）",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"script":"echo","when":false}]}}}
+    },
+    {
+      "id": "bad-target-template-step-when",
+      "target": "targets",
+      "expect": "reject",
+      "desc": "v2.9：template step 不接受 when",
+      "frame": {"targets":{"t-1":{"title":"x","expose":"local","audit":"summary","requiresApproval":false,"notify":"never","steps":[{"template":"smoke","when":"{{x}}"}]}}}
     },
     {
       "id": "good-hello-ack-pack-sources",

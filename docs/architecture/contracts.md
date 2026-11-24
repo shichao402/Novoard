@@ -1,13 +1,13 @@
 # 契约定义（SSOT）
 
-- 版本：v2.8（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。v2.6 只加 Target 可选字段 `inputs`（磁贴点击时选定的运行时参数，ADR-0020），hub 只透传不渲染。v2.7 把不带 `id` 的 `packSources` 项定为整仓来源：agent 扫描仓库内全部 `toolset.json` 自行发现包，Hub 不再登记子目录。v2.8 只加可选字段 `agent.hello.ack.recommendedAgentVersion` / `agent.hello.nack.recommendedAgentVersion`（hub 推荐的 agent 程序版本，低于它的 agent 立刻检查更新、空闲时自动安装）。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
+- 版本：v2.9（v2.0 的身份绑定与 artifact 归属保持不变。v2.1 只加可选字段：`agent.hello.bootId`、任务 `trace`、`run-trace` 上行，以及 Target 的 `lostTtl` / `approvalTtl`。v2.2 只加可选字段与新增帧类型：`agent.hello.ack.hubVersion`、`agent.hello.nack.detail` 与 `contract-schema-mismatch` 原因、新增 `frame.reject` 回执帧。v2.3 只加可选字段 `agent.hello.app`（程序版本、渠道、平台，hub 只记录展示）。v2.4 只加可选字段与新 step 类型：Target 的 `oncePerDay` / `deadline`、第 ⑤ 种 step `uses`（能力包工具调用）、`agent.hello.ack.packSources`（能力包来源清单）。v2.5 把 `packSources` 项的 `id` 从必填放宽为可选的包名覆盖，缺省时由 agent 从包根 `toolset.json` 自动发现。v2.6 只加 Target 可选字段 `inputs`（磁贴点击时选定的运行时参数，ADR-0020），hub 只透传不渲染。v2.7 把不带 `id` 的 `packSources` 项定为整仓来源：agent 扫描仓库内全部 `toolset.json` 自行发现包，Hub 不再登记子目录。v2.8 只加可选字段 `agent.hello.ack.recommendedAgentVersion` / `agent.hello.nack.recommendedAgentVersion`（hub 推荐的 agent 程序版本，低于它的 agent 立刻检查更新、空闲时自动安装）。v2.9 只给 script / openApp / openPath / uses 四种 step 加可选字段 `when`（执行条件，插值后为假则跳过该步，agent ADR-0024），hub 不解释。不带这些字段的 2.1 agent 仍可注册）。全新安装只接受 2.x agent，不提供 1.x 兼容模式
 - 形态分工：本文档定义语义与纪律；帧与数据的机器可校验格式在 [schemas/](schemas/)（JSON Schema draft 2020-12）。两者冲突时以 schema 为准，并回修本文档
 - 本文件是全系统契约的唯一权威源。hub（Novoard 仓）与各 agent 实现（Mac lite-agent、内网 lite-agent 等）都必须对齐这里；cronkit 仅为参照原型（ADR-0007），实现方各自凭默契抄写即制造分叉
 - 字面语纪律：A2A 帧的方法名、字段名、错误码字面对齐 A2A spec（JSON-RPC 2.0 over HTTPS），不私自改名、不改语义；Novoard 私有概念只允许出现在信封层与 `x-novoard-*` 扩展字段
 
 ## 0. 版本与变更流程
 
-- `contractVersion` 语义化版本（当前 `2.8`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
+- `contractVersion` 语义化版本（当前 `2.9`）：主版本破坏兼容（字段删除、语义反转、枚举缩减），次版本向后兼容（新增可选字段、新增枚举值）
 - 握手：`agent.hello` 必带 `contractVersion`；hub 侧主版本不匹配 → 拒绝注册并回执原因，不降级兼容
 - 契约变更 = ops 枚举新增帧、字段语义变更、wire format 任何改动。流程：修订本文件 + 对应 schema + 升版本号，已注册成员对齐后生效，不做静默漂移
 - 字段演进策略：帧类 schema 的 body 层为开放式（`additionalProperties: true`），对端新增未声明字段时接收方忽略该字段并继续处理，不拒绝整帧。当前开放集合共 7 张：`agent.hello`、`agent.hello.ack`、`agent.hello.nack`、`agent.ping`、`telemetry`、`card.update`、`frame.reject`
@@ -102,6 +102,20 @@ steps:
 - `uses` 的包 id 匹配 `^[A-Za-z][A-Za-z0-9-]*$`，工具 id 匹配 `^[a-z][a-z0-9-]*$`；能力包的 manifest、调用约定、退出码与进度协议由 agent 实现定义（novoard-agent ADR-0019），不属于本契约
 - `with`、`cwd` 支持 `{{var}}` 插值，规则同下
 - 依赖的能力包本机不可用时，agent 在装载期报出具体位置与原因，不等到运行时（见 §2 Card 排除规则）
+
+- 条件执行 `when`（v2.9）：script / openApp / openPath / uses 四种 step 可带 `when: "{{var}}"`。插值后去掉首尾空白，为空串或 `false` / `0` / `no` / `off`（不分大小写）时跳过这一步，其余值照常执行。跳过的 step 记为 skipped，不算失败，后续 step 继续；`{{var}}` 无来源时与其他插值一样当场失败。只做真假判断，不支持比较、逻辑运算等表达式。`template` step 不接受 `when`。典型用法是配一个 `choices: ["true", "false"]` 的 input，让点击的人决定开不开某个工具：
+
+```yaml
+inputs:
+  - { name: openRider, label: 打开 Rider, choices: ["true", "false"], default: "false" }
+steps:
+  - uses: workingCopyPool/acquire
+    cwd: "{{poolRoot}}"
+    with: { branch: "{{branch}}" }
+  - openApp: rider
+    when: "{{openRider}}"
+```
+
 
 - 插值语法 `{{var}}`：取值优先级为触发时传入 vars > target `vars` > stepTemplate 默认值
 - `{{var}}` 无任何来源即校验失败：agent 启动自检报错（schemas/target.json），运行期不静默替换为空串
@@ -222,7 +236,7 @@ v2.8 起，hub 在 `agent.hello.ack` 里带可选的 `recommendedAgentVersion`�
 
 <!-- contract-example: ops:agent.hello.ack -->
 ```json
-{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.8", "recommendedAgentVersion": "0.3.15",
+{ "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.9", "recommendedAgentVersion": "0.3.15",
   "packSources": [
     { "git": "https://github.com/example/novoard-packs.git", "branch": "main" },
     { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },
