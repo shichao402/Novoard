@@ -74,6 +74,15 @@ export function normalizePackSource(input) {
     throw invalid(`包名不合法：${id}（字母开头，只含字母、数字、-）`);
   }
   const git = cleanText(input.git, "git", { required: true });
+  // 来源会全局下发并进入审计，不能承载 HTTP 用户名/token 或 URL 查询密钥。
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(git)) {
+    let address;
+    try { address = new URL(git); } catch { throw invalid("git URL 不合法"); }
+    if (address.password || address.search || address.hash
+      || (["http:", "https:"].includes(address.protocol) && address.username)) {
+      throw invalid("git 来源不得包含凭据、查询参数或 fragment；私有凭据只配置在本机");
+    }
+  }
   const branch = cleanText(input.branch, "branch", { required: false }) ?? "main";
   if (/\s/.test(branch) || branch.startsWith("-")) throw invalid(`branch 不合法：${branch}`);
   let subdir = cleanText(input.subdir, "subdir", { required: false });

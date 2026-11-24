@@ -55,7 +55,7 @@ const menu = [
     path: "/pack-sources",
     name: "能力包来源",
     icon: <AppstoreOutlined />,
-    permission: "users.manage",
+    permission: "pack-sources.read",
   },
   {
     path: "/audit",

@@ -35,6 +35,8 @@ export const PERMISSIONS = Object.freeze([
   "roles.manage",
   "webhooks.invoke",
   "wecom.manage",
+  "pack-sources.read",
+  "pack-sources.manage",
 ]);
 
 const OPERATIONAL_PERMISSIONS = Object.freeze(PERMISSIONS.filter((permission) => ![
@@ -42,9 +44,17 @@ const OPERATIONAL_PERMISSIONS = Object.freeze(PERMISSIONS.filter((permission) =>
   "users.manage",
   "roles.manage",
   "wecom.manage",
+  // 全局软件供给管理不是可随意组合的业务角色权限；只由管理员显式委托。
+  "pack-sources.read",
+  "pack-sources.manage",
 ].includes(permission)));
-const PAT_PERMISSIONS = Object.freeze(OPERATIONAL_PERMISSIONS.filter((permission) =>
+const DEFAULT_PAT_PERMISSIONS = Object.freeze(OPERATIONAL_PERMISSIONS.filter((permission) =>
   permission !== "pats.self.manage"));
+const PAT_PERMISSIONS = Object.freeze([
+  ...DEFAULT_PAT_PERMISSIONS,
+  "pack-sources.read",
+  "pack-sources.manage",
+]);
 
 export const BUILTIN_ROLES = Object.freeze({
   superadmin: Object.freeze({
@@ -542,7 +552,7 @@ export async function createIdentityStore({
       const role = roleById(identity, user.roleId);
       let requestedScopes;
       if (scopes === undefined) {
-        requestedScopes = role.permissions.filter((permission) => PAT_PERMISSIONS.includes(permission));
+        requestedScopes = role.permissions.filter((permission) => DEFAULT_PAT_PERMISSIONS.includes(permission));
       } else {
         if (!Array.isArray(scopes) || scopes.length === 0) {
           throw identityError("invalid-pat-scope", "PAT scope 必须是至少包含一项权限的数组");

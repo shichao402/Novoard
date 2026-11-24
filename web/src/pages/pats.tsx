@@ -24,6 +24,8 @@ const machinePermissions = new Set([
   "artifacts.read",
   "audit.read",
   "webhooks.invoke",
+  "pack-sources.read",
+  "pack-sources.manage",
 ]);
 
 export default function PatsPage() {
@@ -119,7 +121,10 @@ export default function PatsPage() {
     me.data?.permissions
       .filter((scope) => machinePermissions.has(scope))
       .map((scope) => ({ label: scope, value: scope })) ?? [];
-  const defaultScopes = scopeOptions.map((option) => option.value);
+  // 来源管理必须明确勾选；不随旧默认全选静默增加软件供给权限。
+  const defaultScopes = scopeOptions
+    .map((option) => option.value)
+    .filter((scope) => !scope.startsWith("pack-sources."));
   return (
     <PageContainer
       title="个人访问令牌"

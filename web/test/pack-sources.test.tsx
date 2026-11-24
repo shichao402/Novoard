@@ -16,7 +16,13 @@ const role = {
   id: "superadmin",
   name: "超级管理员",
   builtIn: true,
-  permissions: ["system.read", "targets.read", "users.manage"],
+  permissions: [
+    "system.read",
+    "targets.read",
+    "users.manage",
+    "pack-sources.read",
+    "pack-sources.manage",
+  ],
   targetAllow: ["*"],
   targetDeny: [],
 };
@@ -29,11 +35,13 @@ type Source = {
   id?: string;
 };
 let sources: Source[] = [];
+let permissions = role.permissions;
 const posts: unknown[] = [];
 const puts: Array<{ key: string; body: unknown }> = [];
 const deletes: string[] = [];
 
 beforeEach(() => {
+  permissions = role.permissions;
   sources = [
     {
       key: "ps-aaaa0001",
@@ -59,7 +67,7 @@ beforeEach(() => {
           updatedAt: "2026-01-01T00:00:00Z",
         },
         role,
-        permissions: role.permissions,
+        permissions,
         csrfToken: "csrf",
       }),
     ),
@@ -164,4 +172,18 @@ test("编辑、删除按行 key 操作", async () => {
   await user.click(screen.getByRole("button", { name: /删\s*除/ }));
   await user.click(await screen.findByRole("button", { name: "确认删除" }));
   await waitFor(() => expect(deletes).toEqual(["ps-aaaa0001"]));
+});
+
+test("来源只读权限显示清单，不显示新增/编辑/删除操作", async () => {
+  permissions = ["pack-sources.read"];
+  renderApp(<PackSourcesPage />);
+  await screen.findByText("git@git.woa.com:firoyang/OSGToolset.git");
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: /新增来源/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /编\s*辑/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /删\s*除/ })).toBeNull();
+  });
+  expect(posts).toHaveLength(0);
+  expect(puts).toHaveLength(0);
+  expect(deletes).toHaveLength(0);
 });

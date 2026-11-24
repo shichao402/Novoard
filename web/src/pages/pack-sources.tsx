@@ -14,7 +14,7 @@ import {
   type PackSource,
   type PackSourceInput,
 } from "@/lib/api";
-import { queryKeys, useMe } from "@/lib/queries";
+import { hasPermission, queryKeys, useMe } from "@/lib/queries";
 
 /** 表单值：只提交仓库和分支，branch 为空时交给服务端缺省 main。 */
 function clean(values: PackSourceInput, row?: PackSource): PackSourceInput {
@@ -43,6 +43,7 @@ export default function PackSourcesPage() {
   const me = useMe();
   const queryClient = useQueryClient();
   const { message } = App.useApp();
+  const canManage = hasPermission(me.data, "pack-sources.manage");
 
   const sources = useQuery({
     queryKey: queryKeys.packSources,
@@ -120,33 +121,34 @@ export default function PackSourcesPage() {
     {
       title: "操作",
       key: "actions",
-      render: (_, row) => (
-        <Space>
-          <ModalForm<PackSourceInput>
-            title="编辑来源"
-            initialValues={row}
-            modalProps={{ destroyOnHidden: true }}
-            submitter={{ searchConfig: { submitText: "保存" } }}
-            trigger={
-              <Button size="small" icon={<EditOutlined />}>
-                编辑
+      render: (_, row) =>
+        canManage ? (
+          <Space>
+            <ModalForm<PackSourceInput>
+              title="编辑来源"
+              initialValues={row}
+              modalProps={{ destroyOnHidden: true }}
+              submitter={{ searchConfig: { submitText: "保存" } }}
+              trigger={
+                <Button size="small" icon={<EditOutlined />}>
+                  编辑
+                </Button>
+              }
+              onFinish={(values) => submit(values, row)}
+            >
+              <SourceFields />
+            </ModalForm>
+            <Popconfirm
+              title={`删除来源 ${describe(row)}？已安装的包不受影响，但无法再安装或更新。`}
+              okText="确认删除"
+              onConfirm={() => remove.mutate(row.key)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>
+                删除
               </Button>
-            }
-            onFinish={(values) => submit(values, row)}
-          >
-            <SourceFields />
-          </ModalForm>
-          <Popconfirm
-            title={`删除来源 ${describe(row)}？已安装的包不受影响，但无法再安装或更新。`}
-            okText="确认删除"
-            onConfirm={() => remove.mutate(row.key)}
-          >
-            <Button size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
+            </Popconfirm>
+          </Space>
+        ) : null,
     },
   ];
 
@@ -159,7 +161,7 @@ export default function PackSourcesPage() {
         <Alert
           type="info"
           showIcon
-          message="修改后，在线成员重连时生效。"
+          message="修改后，成员重连或主动同步时生效。"
           description="agent 拉下仓库后会扫描所有 toolset.json，在本机能力包页列出可装的包；在那里打开「自动添加」，仓库里的包（包括以后新加的）会自己装上。私有仓库请在 agent 本机的「设置 → Git 凭据」配置，凭据不经过 Hub。"
         />
         <ProTable<PackSource>
@@ -170,23 +172,27 @@ export default function PackSourcesPage() {
           loading={sources.isPending}
           dataSource={sources.data?.sources ?? []}
           columns={columns}
-          toolBarRender={() => [
-            <ModalForm<PackSourceInput>
-              key="add"
-              title="新增能力包来源"
-              initialValues={{ branch: "main" }}
-              modalProps={{ destroyOnHidden: true }}
-              submitter={{ searchConfig: { submitText: "保存" } }}
-              trigger={
-                <Button type="primary" icon={<PlusOutlined />}>
-                  新增来源
-                </Button>
-              }
-              onFinish={(values) => submit(values)}
-            >
-              <SourceFields />
-            </ModalForm>,
-          ]}
+          toolBarRender={() =>
+            canManage
+              ? [
+                  <ModalForm<PackSourceInput>
+                    key="add"
+                    title="新增能力包来源"
+                    initialValues={{ branch: "main" }}
+                    modalProps={{ destroyOnHidden: true }}
+                    submitter={{ searchConfig: { submitText: "保存" } }}
+                    trigger={
+                      <Button type="primary" icon={<PlusOutlined />}>
+                        新增来源
+                      </Button>
+                    }
+                    onFinish={(values) => submit(values)}
+                  >
+                    <SourceFields />
+                  </ModalForm>,
+                ]
+              : []
+          }
         />
       </Space>
     </PageContainer>
@@ -200,7 +206,7 @@ function SourceFields() {
         name="git"
         label="仓库地址"
         placeholder="https://github.com/group/repo.git"
-        tooltip="推荐 HTTPS 地址；私有仓库的凭据在 agent 本机按 URL 配置"
+        tooltip="公开仓可用 HTTPS；私有仓有本机 SSH 权限时优先 SSH，否则在 agent 本机配置 Git 凭据，勿把 token 写进地址"
         rules={[
           { required: true, whitespace: true, message: "请输入仓库地址" },
         ]}

@@ -730,8 +730,24 @@ export function startServer({
         return;
       }
 
+      // 成员只能拉取与 hello.ack 同形的只读来源，不得获取管理 key 或写全局来源。
+      if (pathname === "/api/agent/pack-sources" && req.method === "GET") {
+        const token = parseBearer(req.headers.authorization);
+        if (!token || !members.authenticate(token)) {
+          sendJson(res, 401, { error: "agent token required" });
+          return;
+        }
+        if (!packSources) {
+          sendJson(res, 503, { error: "pack-sources-unavailable" });
+          return;
+        }
+        res.setHeader("Cache-Control", "no-store");
+        sendJson(res, 200, { sources: packSources.wire() });
+        return;
+      }
+
       if (pathname === "/api/pack-sources" && req.method === "GET") {
-        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false });
+        const authn = await requirePrincipal(req, res, "pack-sources.read");
         if (!authn) return;
         sendJson(res, 200, { sources: packSources ? packSources.list() : [] });
         return;
@@ -741,7 +757,7 @@ export function startServer({
         ? [pathname, null]
         : (req.method === "PUT" || req.method === "DELETE") ? pathname.match(/^\/api\/pack-sources\/([^/]+)$/) : null;
       if (packSourceRoute) {
-        const authn = await requirePrincipal(req, res, "users.manage", { session: true, pat: false, mutation: true });
+        const authn = await requirePrincipal(req, res, "pack-sources.manage", { mutation: true });
         if (!authn) return;
         if (!packSources) {
           sendJson(res, 503, { error: "pack-sources-unavailable" });
