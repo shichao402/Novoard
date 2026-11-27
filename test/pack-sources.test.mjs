@@ -21,7 +21,7 @@ import { CONTRACT_VERSION } from "../src/contract/version.mjs";
 import { configureTestAgentTokens } from "./test-auth.mjs";
 
 const ORIGIN = "http://test.local";
-const OSG = { git: "git@git.woa.com:firoyang/OSGToolset.git", branch: "main" };
+const OSG = { git: "git@git.example.com:team/my-packs.git", branch: "main" };
 const PACKS = "https://github.com/x/novoard-packs.git";
 const strip = ({ key: _key, ...rest }) => rest;
 

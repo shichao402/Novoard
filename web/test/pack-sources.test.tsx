@@ -45,7 +45,7 @@ beforeEach(() => {
   sources = [
     {
       key: "ps-aaaa0001",
-      git: "git@git.woa.com:firoyang/OSGToolset.git",
+      git: "git@git.example.com:team/my-packs.git",
       branch: "main",
     },
   ];
@@ -98,7 +98,7 @@ test("新增来源：只填仓库和分支", async () => {
   const user = userEvent.setup();
   renderApp(<PackSourcesPage />);
   expect(
-    await screen.findByText("git@git.woa.com:firoyang/OSGToolset.git"),
+    await screen.findByText("git@git.example.com:team/my-packs.git"),
   ).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /新增来源/ }));
@@ -155,7 +155,7 @@ test("旧的包名覆盖条目：显示标签，编辑时保留 id 与 subdir", 
 test("编辑、删除按行 key 操作", async () => {
   const user = userEvent.setup();
   renderApp(<PackSourcesPage />);
-  await screen.findByText("git@git.woa.com:firoyang/OSGToolset.git");
+  await screen.findByText("git@git.example.com:team/my-packs.git");
 
   await user.click(screen.getByRole("button", { name: /编\s*辑/ }));
   const dialog = await screen.findByRole("dialog");
@@ -166,7 +166,7 @@ test("编辑、删除按行 key 操作", async () => {
   await waitFor(() => expect(puts).toHaveLength(1));
   expect(puts[0]).toEqual({
     key: "ps-aaaa0001",
-    body: { git: "git@git.woa.com:firoyang/OSGToolset.git", branch: "release" },
+    body: { git: "git@git.example.com:team/my-packs.git", branch: "release" },
   });
 
   await user.click(screen.getByRole("button", { name: /删\s*除/ }));
@@ -177,7 +177,7 @@ test("编辑、删除按行 key 操作", async () => {
 test("来源只读权限显示清单，不显示新增/编辑/删除操作", async () => {
   permissions = ["pack-sources.read"];
   renderApp(<PackSourcesPage />);
-  await screen.findByText("git@git.woa.com:firoyang/OSGToolset.git");
+  await screen.findByText("git@git.example.com:team/my-packs.git");
   await waitFor(() => {
     expect(screen.queryByRole("button", { name: /新增来源/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /编\s*辑/ })).toBeNull();

@@ -88,13 +88,13 @@ steps:
 
 <!-- contract-example: targets -->
 ```json
-{ "targets": { "osg-trunk-nightly": {
-  "title": "OSG Trunk 夜间例行", "schedule": "10 2 * * *", "oncePerDay": true, "deadline": "07:00",
+{ "targets": { "demo-nightly": {
+  "title": "示例工程夜间例行", "schedule": "10 2 * * *", "oncePerDay": true, "deadline": "07:00",
   "steps": [
-    { "uses": "osg/revert-generated", "cwd": "D:/workspace/OSG_Trunk1" },
-    { "uses": "versionControl/svn-update", "cwd": "D:/workspace/OSG_Trunk1",
+    { "uses": "demo/revert-generated", "cwd": "D:/workspace/MyProject" },
+    { "uses": "versionControl/svn-update", "cwd": "D:/workspace/MyProject",
       "with": { "strategy": "follow-latest", "onConflict": "postpone" }, "retry": 1, "retryInterval": "2m" },
-    { "uses": "general/unity-warmup", "cwd": "D:/workspace/OSG_Trunk1/Project" }
+    { "uses": "general/unity-warmup", "cwd": "D:/workspace/MyProject/Project" }
   ],
   "expose": "local", "audit": "summary", "requiresApproval": false, "notify": "on-failure" } } }
 ```
@@ -239,8 +239,8 @@ v2.8 起，hub 在 `agent.hello.ack` 里带可选的 `recommendedAgentVersion`�
 { "type": "agent.hello.ack", "inFlightTaskIds": [], "hubVersion": "2.9", "recommendedAgentVersion": "0.3.17",
   "packSources": [
     { "git": "https://github.com/example/novoard-packs.git", "branch": "main" },
-    { "git": "https://git.example.com/team/OSGToolset.git", "branch": "main" },
-    { "id": "osgNext", "git": "https://git.example.com/team/OSGToolset.git", "branch": "next", "subdir": "packs/osg" }
+    { "git": "https://git.example.com/team/my-packs.git", "branch": "main" },
+    { "id": "myPackNext", "git": "https://git.example.com/team/my-packs.git", "branch": "next", "subdir": "packs/my-pack" }
   ] }
 ```
 

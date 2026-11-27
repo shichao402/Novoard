@@ -25,11 +25,11 @@ POST /api/pack-sources
 Authorization: Bearer <source-scoped PAT>
 Content-Type: application/json
 
-{"git":"git@git.woa.com:firoyang/OSGToolset.git","branch":"main"}
+{"git":"git@git.example.com:team/my-packs.git","branch":"main"}
 ```
 
 ```json
-{"source":{"key":"ps-0123456789ab","git":"git@git.woa.com:firoyang/OSGToolset.git","branch":"main"}}
+{"source":{"key":"ps-0123456789ab","git":"git@git.example.com:team/my-packs.git","branch":"main"}}
 ```
 
 新增成功 `201`；列表 `200` 返回 `{"sources":[...]}`，管理 key 是 `ps-...`。修改 `PUT` 使用同一条目的管理 key，提交整条来源，成功 `200`。未传 branch 的新增默认 main。无覆盖包名的来源是整仓扫描，不需填写子目录；已有覆盖条目的 `id` 与 `subdir` 应原样保留。
@@ -52,8 +52,8 @@ agent 仓 `skills/novoard-manage/scripts/novoard.py` 仅需 Python 标准库。P
 
 ```powershell
 python <skill>/scripts/novoard.py pack-sources list
-python <skill>/scripts/novoard.py pack-sources add --git git@git.woa.com:firoyang/OSGToolset.git --branch main
-python <skill>/scripts/novoard.py pack-sources update --key <ps-key> --git git@git.woa.com:firoyang/OSGToolset.git
+python <skill>/scripts/novoard.py pack-sources add --git git@git.example.com:team/my-packs.git --branch main
+python <skill>/scripts/novoard.py pack-sources update --key <ps-key> --git git@git.example.com:team/my-packs.git
 python <skill>/scripts/novoard.py pack-sources remove --key <ps-key> --confirm
 python <skill>/scripts/novoard.py sync-pack-sources
 python <skill>/scripts/novoard.py packs
